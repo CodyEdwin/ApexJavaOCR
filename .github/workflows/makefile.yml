@@ -14,8 +14,11 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
+    - name: Updating apt
+      run: sudo apt update
+
     - name: Settings up JDK21
-      run: openjdk-21-jdk
+      run: sudo apt install openjdk-21-jdk
 
     - name: Setting script execution true
       run: chmod +x ./gradlew
