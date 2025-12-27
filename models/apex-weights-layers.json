@@ -1,0 +1,178 @@
+[
+  {
+    "name": "FeatureExtraction.ConvNet.0.weight",
+    "type": 1,
+    "shape": [
+      3,
+      3,
+      1,
+      32
+    ],
+    "bias_shape": []
+  },
+  {
+    "name": "FeatureExtraction.ConvNet.3.weight",
+    "type": 1,
+    "shape": [
+      3,
+      3,
+      32,
+      64
+    ],
+    "bias_shape": []
+  },
+  {
+    "name": "FeatureExtraction.ConvNet.6.weight",
+    "type": 1,
+    "shape": [
+      3,
+      3,
+      64,
+      128
+    ],
+    "bias_shape": []
+  },
+  {
+    "name": "FeatureExtraction.ConvNet.8.weight",
+    "type": 1,
+    "shape": [
+      128,
+      128,
+      3,
+      3
+    ],
+    "bias_shape": []
+  },
+  {
+    "name": "FeatureExtraction.ConvNet.11.weight",
+    "type": 1,
+    "shape": [
+      3,
+      3,
+      128,
+      256
+    ],
+    "bias_shape": []
+  },
+  {
+    "name": "FeatureExtraction.ConvNet.14.weight",
+    "type": 1,
+    "shape": [
+      256,
+      256,
+      3,
+      3
+    ],
+    "bias_shape": []
+  },
+  {
+    "name": "FeatureExtraction.ConvNet.18.weight",
+    "type": 1,
+    "shape": [
+      256,
+      256,
+      2,
+      2
+    ],
+    "bias_shape": []
+  },
+  {
+    "name": "SequenceModeling.0.rnn.weight_forward",
+    "type": 4,
+    "shape": [
+      1024,
+      256
+    ],
+    "bias_shape": []
+  },
+  {
+    "name": "SequenceModeling.0.rnn.weight_forward_hidden",
+    "type": 4,
+    "shape": [
+      1024,
+      256
+    ],
+    "bias_shape": []
+  },
+  {
+    "name": "SequenceModeling.0.rnn.weight_forward_reverse",
+    "type": 4,
+    "shape": [
+      1024,
+      256
+    ],
+    "bias_shape": []
+  },
+  {
+    "name": "SequenceModeling.0.rnn.weight_forward_hidden_reverse",
+    "type": 4,
+    "shape": [
+      1024,
+      256
+    ],
+    "bias_shape": []
+  },
+  {
+    "name": "SequenceModeling.0.linear.weight",
+    "type": 2,
+    "shape": [
+      256,
+      512
+    ],
+    "bias_shape": []
+  },
+  {
+    "name": "SequenceModeling.1.rnn.weight_forward",
+    "type": 4,
+    "shape": [
+      1024,
+      256
+    ],
+    "bias_shape": []
+  },
+  {
+    "name": "SequenceModeling.1.rnn.weight_forward_hidden",
+    "type": 4,
+    "shape": [
+      1024,
+      256
+    ],
+    "bias_shape": []
+  },
+  {
+    "name": "SequenceModeling.1.rnn.weight_forward_reverse",
+    "type": 4,
+    "shape": [
+      1024,
+      256
+    ],
+    "bias_shape": []
+  },
+  {
+    "name": "SequenceModeling.1.rnn.weight_forward_hidden_reverse",
+    "type": 4,
+    "shape": [
+      1024,
+      256
+    ],
+    "bias_shape": []
+  },
+  {
+    "name": "SequenceModeling.1.linear.weight",
+    "type": 2,
+    "shape": [
+      256,
+      512
+    ],
+    "bias_shape": []
+  },
+  {
+    "name": "Prediction.weight",
+    "type": 2,
+    "shape": [
+      97,
+      256
+    ],
+    "bias_shape": []
+  }
+]
