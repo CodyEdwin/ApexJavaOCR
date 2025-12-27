@@ -157,6 +157,14 @@ public class Conv2D implements Layer {
         int outputHeight = calculateOutputSize(inputHeight, kernelSize[0], strides[0], padding[0], dilation[0]);
         int outputWidth = calculateOutputSize(inputWidth, kernelSize[1], strides[1], padding[1], dilation[1]);
 
+        // Validate output dimensions
+        if (outputHeight <= 0 || outputWidth <= 0) {
+            throw new IllegalArgumentException(
+                String.format("Invalid convolution output size: %dx%d for input %dx%d with kernel %dx%d, stride %dx%d, padding %dx%d",
+                    outputHeight, outputWidth, inputHeight, inputWidth,
+                    kernelSize[0], kernelSize[1], strides[0], strides[1], padding[0], padding[1]));
+        }
+
         long[] outputShape = new long[]{batchSize, outputHeight, outputWidth, filters};
         Tensor output = new Tensor(outputShape, Tensor.DataType.FLOAT32);
 

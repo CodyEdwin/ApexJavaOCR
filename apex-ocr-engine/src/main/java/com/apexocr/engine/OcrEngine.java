@@ -251,6 +251,27 @@ public class OcrEngine implements AutoCloseable {
         int height = image.getHeight();
         int width = image.getWidth();
 
+        // Validate minimum dimensions for CRNN network architecture
+        // The network has 4 conv layers (3x3 kernels) and 4 max-pool layers (2x2)
+        // Minimum height needed: (3-1)*4 + 1 = 9, but we use 32 as target
+        // Minimum width needed depends on number of characters, but should be > 8
+        int minHeight = 32;  // Target height for the network
+        int minWidth = 8;    // Minimum width for at least one character
+
+        if (height < minHeight) {
+            throw new IllegalArgumentException(
+                String.format("Image height (%d) is too small. Minimum required is %d pixels. " +
+                    "The image will be resized to %d pixels height during preprocessing.",
+                    height, minHeight, minHeight));
+        }
+
+        if (width < minWidth) {
+            throw new IllegalArgumentException(
+                String.format("Image width (%d) is too small. Minimum required is %d pixels. " +
+                    "This may indicate the image is too narrow for text recognition.",
+                    width, minWidth));
+        }
+
         // Ensure dimensions are compatible with network
         int timeSteps = width;
         int features = height;
