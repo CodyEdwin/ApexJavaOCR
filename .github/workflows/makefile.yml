@@ -36,10 +36,16 @@ jobs:
       - name: Set up Gradle (system)
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.5' # optional: pick a Gradle version compatible with your project
+          gradle-version: '8.5'
+          
+    - name: Run make
+      run: make
 
-      - name: Running Make
-        uses: make
+    - name: Run check
+      run: make check
+
+    - name: Run distcheck
+      run: make distcheck
 
       - name: Upload Desktop JAR(s)
         uses: actions/upload-artifact@v4
