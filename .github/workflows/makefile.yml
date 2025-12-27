@@ -38,14 +38,14 @@ jobs:
         with:
           gradle-version: '8.5'
           
-    - name: Run make
-      run: make
-
-    - name: Run check
-      run: make check
-
-    - name: Run distcheck
-      run: make distcheck
+      - name: Run make
+        run: make
+  
+      - name: Run check
+        run: make check
+  
+      - name: Run distcheck
+        run: make distcheck
 
       - name: Upload Desktop JAR(s)
         uses: actions/upload-artifact@v4
