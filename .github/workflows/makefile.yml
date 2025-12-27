@@ -25,11 +25,6 @@ jobs:
 
       - name: Set gradlew exec perm
         run: chmod +x ./gradlew
-
-      - name: Set up Gradle (system)
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.5'
           
       - name: Run make
         run: make
