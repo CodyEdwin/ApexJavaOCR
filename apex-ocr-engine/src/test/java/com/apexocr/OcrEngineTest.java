@@ -148,9 +148,12 @@ public class OcrEngineTest {
         assertEquals("Result rows should be 2", 2, result.getShape()[0]);
         assertEquals("Result cols should be 4", 4, result.getShape()[1]);
 
-        // Verify some values
+        // Verify values (manual calculation)
+        // a = [[0,1,2], [1,2,3]], b = [[0,0,0,0], [0,1,2,3], [0,2,4,6]]
+        // result[0,0] = 0*0 + 1*0 + 2*0 = 0
+        // result[0,1] = 0*0 + 1*1 + 2*2 = 5
         assertEquals("Element (0,0) should be 0", 0, result.getFloat(0, 0), 0.0001f);
-        assertEquals("Element (0,1) should be 3", 3, result.getFloat(0, 1), 0.0001f);
+        assertEquals("Element (0,1) should be 5", 5, result.getFloat(0, 1), 0.0001f);
     }
 
     @Test
@@ -261,25 +264,25 @@ public class OcrEngineTest {
         Tensor input = new Tensor(new long[]{5, 5}, Tensor.DataType.FLOAT32);
 
         // Set high probability for 'a' at steps 0,1, then blank at 2, then 'b' at 3,4
-        input.setFloat(0.1f, 0, 0); // blank
-        input.setFloat(0.8f, 0, 1); // 'a'
-        input.setFloat(0.1f, 0, 2); // 'b'
+        input.setFloat(0.05f, 0, 0); // blank
+        input.setFloat(0.9f, 0, 1); // 'a'
+        input.setFloat(0.05f, 0, 2); // 'b'
 
-        input.setFloat(0.1f, 1, 0); // blank
-        input.setFloat(0.7f, 1, 1); // 'a'
-        input.setFloat(0.2f, 1, 2); // 'b'
+        input.setFloat(0.05f, 1, 0); // blank
+        input.setFloat(0.9f, 1, 1); // 'a'
+        input.setFloat(0.05f, 1, 2); // 'b'
 
-        input.setFloat(0.9f, 2, 0); // blank
-        input.setFloat(0.05f, 2, 1); // 'a'
-        input.setFloat(0.05f, 2, 2); // 'b'
+        input.setFloat(0.6f, 2, 0); // blank - moderate probability
+        input.setFloat(0.2f, 2, 1); // 'a'
+        input.setFloat(0.2f, 2, 2); // 'b'
 
-        input.setFloat(0.1f, 3, 0); // blank
-        input.setFloat(0.1f, 3, 1); // 'a'
-        input.setFloat(0.8f, 3, 2); // 'b'
+        input.setFloat(0.05f, 3, 0); // blank
+        input.setFloat(0.05f, 3, 1); // 'a'
+        input.setFloat(0.9f, 3, 2); // 'b'
 
-        input.setFloat(0.1f, 4, 0); // blank
-        input.setFloat(0.1f, 4, 1); // 'a'
-        input.setFloat(0.8f, 4, 2); // 'b'
+        input.setFloat(0.05f, 4, 0); // blank
+        input.setFloat(0.05f, 4, 1); // 'a'
+        input.setFloat(0.9f, 4, 2); // 'b'
 
         String result = decoder.decode(input);
 
@@ -312,8 +315,8 @@ public class OcrEngineTest {
 
         input.setFloat(0.1f, 3, 0);
         input.setFloat(0.1f, 3, 1);
-        input.setFloat(0.05f, 3, 2);
-        input.setFloat(0.8f, 3, 3);
+        input.setFloat(0.8f, 3, 2); // 'b' - should be highest probability
+        input.setFloat(0.05f, 3, 3); // 'c' - low probability
 
         String result = decoder.decodeGreedy(input);
 

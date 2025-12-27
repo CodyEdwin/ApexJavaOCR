@@ -263,7 +263,8 @@ public class Dense implements Layer {
         }
 
         long inputSize = 1;
-        for (int i = 0; i < inputShape.length; i++) {
+        // Skip batch dimension (first dimension) when calculating input size
+        for (int i = 1; i < inputShape.length; i++) {
             inputSize *= inputShape[i];
         }
 

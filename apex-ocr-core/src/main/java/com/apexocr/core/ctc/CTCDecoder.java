@@ -98,12 +98,12 @@ public class CTCDecoder {
      * Performs CTC beam search decoding.
      */
     private BeamSearchResult beamSearch(float[][] logProbs, int timeSteps, int numClasses) {
-        // Initialize beam with blank sequence
+        // Map from prefix string to beam state
         Map<String, BeamState> beams = new HashMap<>();
         BeamState initialState = new BeamState();
         initialState.logProb = 0f;
         initialState.labels = new ArrayList<>();
-        initialState.lastLabel = 0; // Blank
+        initialState.lastLabel = 0;
         beams.put("", initialState);
 
         // Process each time step
@@ -122,22 +122,32 @@ public class CTCDecoder {
                         continue;
                     }
 
-                    // Blank token: extend existing beam
                     if (c == 0) {
-                        BeamState newState = extendBeam(state, prefix, -1);
+                        // Blank: extend without adding character
+                        BeamState newState = new BeamState();
+                        newState.logProb = state.logProb + logProb;
+                        newState.labels = new ArrayList<>(state.labels);
+                        newState.lastLabel = 0;
                         mergeBeam(newBeams, prefix, newState);
-                    }
-                    // Non-blank token: can extend or create new beam
-                    else {
-                        // Check if this extends the previous non-blank character
-                        if (state.lastLabel == c && (mergeRepeated || prefix.isEmpty())) {
-                            // Same as last non-blank: extend existing beam
-                            BeamState newState = extendBeam(state, prefix, c);
+                    } else {
+                        // Non-blank character
+                        String charStr = labelToChar.get(c);
+                        
+                        if (!prefix.isEmpty() && prefix.charAt(prefix.length() - 1) == charStr.charAt(0) && mergeRepeated) {
+                            // Same as last character: extend without adding to prefix
+                            BeamState newState = new BeamState();
+                            newState.logProb = state.logProb + logProb;
+                            newState.labels = new ArrayList<>(state.labels);
+                            newState.lastLabel = c;
                             mergeBeam(newBeams, prefix, newState);
                         } else {
-                            // Different character: create new beam
-                            String newPrefix = prefix + labelToChar.get(c);
-                            BeamState newState = extendBeam(state, newPrefix, c);
+                            // Different character: add to prefix
+                            String newPrefix = prefix + charStr;
+                            BeamState newState = new BeamState();
+                            newState.logProb = state.logProb + logProb;
+                            newState.labels = new ArrayList<>(state.labels);
+                            newState.labels.add(c);
+                            newState.lastLabel = c;
                             mergeBeam(newBeams, newPrefix, newState);
                         }
                     }
@@ -155,9 +165,9 @@ public class CTCDecoder {
     /**
      * Extends a beam with a new character.
      */
-    private BeamState extendBeam(BeamState state, String prefix, int newLabel) {
+    private BeamState extendBeam(BeamState state, String prefix, int newLabel, float logProb) {
         BeamState newState = new BeamState();
-        newState.logProb = state.logProb;
+        newState.logProb = state.logProb + logProb;
         newState.labels = new ArrayList<>(state.labels);
         newState.lastLabel = newLabel;
         return newState;
