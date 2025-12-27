@@ -101,4 +101,11 @@ tasks.register("generateDocs") {
         """.trimIndent())
         println("Documentation generated in doc/")
     }
+
+tasks.compileJava {
+    options.fork = true
+    myJavaHome = project.findProperty("myJavaHome") as String? ?: System.getenv("JAVA_HOME") ?: error("Java home not configured")
+    options.forkOptions.javaHome = file(myJavaHome)
+}
+
 }
