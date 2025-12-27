@@ -138,41 +138,14 @@ install: build
 	@# Install CLI
 	@echo "Installing CLI..."
 	@./gradlew :apex-ocr-cli:distTar --no-daemon -q 2>/dev/null
-	@tar -xzf apex-ocr-cli/build/distributions/apex-ocr-cli-$(VERSION).tar -C $(DESTDIR)$(SHARE_INSTALL_DIR)/
-	@ln -sf $(SHARE_INSTALL_DIR)/bin/apex-ocr $(DESTDIR)$(BIN_INSTALL_DIR)/apex-ocr
-
-	@# Create wrapper script
-	@echo "Creating wrapper scripts..."
-	@cat > $(DESTDIR)$(BIN_INSTALL_DIR)/apex-ocr << 'WRAPPER_EOF'
-#!/bin/bash
-# ApexJavaOCR Wrapper Script
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LIB_DIR=$(LIB_INSTALL_DIR)
-JAVA=java
-
-JAR_FILES=""
-for jar in $$LIB_DIR/apex-ocr-*.jar; do
-    if [ -f "$$jar" ]; then
-        JAR_FILES="$$JAR_FILES:$$jar"
-    fi
-done
-
-if [ -z "$$JAR_FILES" ]; then
-    echo "Error: JAR files not found!"
-    exit 1
-fi
-
-exec $$JAVA -cp "$$JAR_FILES" com.apexocr.cli.Main "$$@"
-WRAPPER_EOF
-	@chmod +x $(DESTDIR)$(BIN_INSTALL_DIR)/apex-ocr
+	@tar -xf apex-ocr-cli/build/distributions/apex-ocr-cli-$(VERSION).tar -C $(DESTDIR)$(SHARE_INSTALL_DIR)/
+	@ln -sf $(SHARE_INSTALL_DIR)/apex-ocr-cli-$(VERSION)/bin/apex-ocr-cli $(DESTDIR)$(BIN_INSTALL_DIR)/apex-ocr
 
 	@# Create environment setup script
 	@echo "Creating environment setup..."
-	@cat > $(DESTDIR)$(SHARE_INSTALL_DIR)/apex-ocr-env.sh << 'ENV_EOF'
-# ApexJavaOCR Environment Setup
-export APEX_OCR_HOME=$(SHARE_INSTALL_DIR)
-export APEX_OCR_LIB=$(LIB_INSTALL_DIR)
-ENV_EOF
+	@ echo '# ApexJavaOCR Environment Setup' > $(DESTDIR)$(SHARE_INSTALL_DIR)/apex-ocr-env.sh
+	@ echo "export APEX_OCR_HOME=$(SHARE_INSTALL_DIR)" >> $(DESTDIR)$(SHARE_INSTALL_DIR)/apex-ocr-env.sh
+	@ echo "export APEX_OCR_LIB=$(LIB_INSTALL_DIR)" >> $(DESTDIR)$(SHARE_INSTALL_DIR)/apex-ocr-env.sh
 
 	@# Create version file
 	@echo "Creating version file..."
@@ -277,4 +250,3 @@ help:
 	@echo "  make install                 # Install to /usr/local"
 	@echo "  make install-user            # Install to ~/.local"
 	@echo ""
-
