@@ -23,15 +23,8 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
 
-      - name: Cache Gradle
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles('**/gradle-wrapper.properties') }}-${{ hashFiles('**/*.gradle*','**/*.gradle.kts') }}
-          restore-keys: |
-            ${{ runner.os }}-gradle-
+      - name: Set gradlew exec perm
+        run: chmod +x ./gradlew
 
       - name: Set up Gradle (system)
         uses: gradle/actions/setup-gradle@v4
