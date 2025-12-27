@@ -4,6 +4,8 @@ import com.apexocr.core.tensor.Tensor;
 import com.apexocr.core.tensor.TensorOperations;
 import com.apexocr.core.tensor.MemoryManager;
 
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.Arrays;
 import java.util.concurrent.ThreadLocalRandom;
 
@@ -372,13 +374,112 @@ public class Conv2D implements Layer {
 
     @Override
     public byte[] serializeParameters() {
-        // Simplified serialization
-        return new byte[0];
+        if (kernels == null) {
+            return new byte[0];
+        }
+        
+        // Format: [kernel data][bias data]
+        // Each tensor: [shape dims][shape values][data bytes]
+        long[] kernelShape = kernels.getShape();
+        long[] biasShape = bias != null ? bias.getShape() : new long[0];
+        
+        int kernelSizeBytes = (int) (kernels.getSize() * Float.BYTES);
+        int biasSizeBytes = (int) (bias != null ? bias.getSize() * Float.BYTES : 0);
+        
+        int totalBytes = 4 + kernelShape.length * 8 + kernelSizeBytes + 
+                         4 + biasShape.length * 8 + biasSizeBytes;
+        
+        java.nio.ByteBuffer buffer = java.nio.ByteBuffer.allocate(totalBytes);
+        buffer.order(java.nio.ByteOrder.LITTLE_ENDIAN);
+        
+        // Write kernel shape
+        buffer.putInt(kernelShape.length);
+        for (long dim : kernelShape) {
+            buffer.putLong(dim);
+        }
+        
+        // Write kernel data
+        for (long i = 0; i < kernels.getSize(); i++) {
+            buffer.putFloat(kernels.getFloat(i));
+        }
+        
+        // Write bias shape
+        buffer.putInt(biasShape.length);
+        for (long dim : biasShape) {
+            buffer.putLong(dim);
+        }
+        
+        // Write bias data
+        if (bias != null) {
+            for (long i = 0; i < bias.getSize(); i++) {
+                buffer.putFloat(bias.getFloat(i));
+            }
+        }
+        
+        return buffer.array();
     }
 
     @Override
     public void deserializeParameters(byte[] data) {
-        // Simplified deserialization
+        if (data == null || data.length == 0) {
+            return;
+        }
+        
+        ByteBuffer buffer = ByteBuffer.wrap(data);
+        buffer.order(ByteOrder.LITTLE_ENDIAN);
+        
+        // Read kernel shape
+        int kernelShapeLen = buffer.getInt();
+        long[] kernelShape = new long[kernelShapeLen];
+        for (int i = 0; i < kernelShapeLen; i++) {
+            kernelShape[i] = buffer.getLong();
+        }
+        
+        // Read kernel data (4D tensor: [kernelHeight, kernelWidth, inChannels, filters])
+        long kernelSize = 1;
+        for (long dim : kernelShape) kernelSize *= dim;
+        kernels = new Tensor(kernelShape, Tensor.DataType.FLOAT32);
+        int rank = kernelShape.length;
+        int[] indices = new int[rank];
+        for (long i = 0; i < kernelSize; i++) {
+            float val = buffer.getFloat();
+            switch (rank) {
+                case 1: kernels.setFloat(val, indices[0]); break;
+                case 2: kernels.setFloat(val, indices[0], indices[1]); break;
+                case 3: kernels.setFloat(val, indices[0], indices[1], indices[2]); break;
+                case 4: kernels.setFloat(val, indices[0], indices[1], indices[2], indices[3]); break;
+                default: kernels.setFloat(val, i);
+            }
+            for (int d = rank - 1; d >= 0; d--) {
+                indices[d]++;
+                if (d > 0 && indices[d] >= kernelShape[d]) {
+                    indices[d] = 0;
+                } else {
+                    break;
+                }
+            }
+        }
+        
+        // Read bias shape
+        int biasShapeLen = buffer.getInt();
+        if (biasShapeLen > 0) {
+            long[] biasShape = new long[biasShapeLen];
+            for (int i = 0; i < biasShapeLen; i++) {
+                biasShape[i] = buffer.getLong();
+            }
+            
+            // Read bias data (1D tensor)
+            long biasSize = 1;
+            for (long dim : biasShape) biasSize *= dim;
+            bias = new Tensor(biasShape, Tensor.DataType.FLOAT32);
+            for (long i = 0; i < biasSize; i++) {
+                bias.setFloat(buffer.getFloat(), (int) i);
+            }
+        } else {
+            bias = null;
+        }
+        
+        initialized = true;
     }
 
     @Override

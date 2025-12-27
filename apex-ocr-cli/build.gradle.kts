@@ -5,7 +5,8 @@ plugins {
 }
 
 application {
-    mainClass.set("com.apexocr.cli.Main")
+    mainClass.set("com.apexocr.cli.DemoMain")
+    applicationName = "apex-ocr-demo"
 }
 
 java {

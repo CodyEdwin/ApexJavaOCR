@@ -4,6 +4,8 @@ import com.apexocr.core.tensor.Tensor;
 import com.apexocr.core.tensor.TensorOperations;
 import com.apexocr.core.tensor.MemoryManager;
 
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.Arrays;
 
 /**
@@ -23,9 +25,12 @@ public class BiLSTM implements Layer {
     private final boolean returnSequences;
     private final float dropoutRate;
 
-    private Layer forwardLSTM;
-    private Layer backwardLSTM;
-
+    // Stored weights for the LSTM gates
+    private Tensor forwardGateWeights;
+    private Tensor forwardGateBias;
+    private Tensor backwardGateWeights;
+    private Tensor backwardGateBias;
+    
     private Tensor forwardHiddenState;
     private Tensor backwardHiddenState;
     private Tensor forwardCellState;
@@ -35,6 +40,7 @@ public class BiLSTM implements Layer {
     private long[] outputShape;
     private boolean training;
     private boolean initialized;
+    private int inputFeatures;
 
     /**
      * Creates a new bidirectional LSTM layer.
@@ -83,8 +89,15 @@ public class BiLSTM implements Layer {
 
     @Override
     public long getParameterCount() {
-        // BiLSTM uses simplified random weights in denseGates, no trainable parameters
-        return 0;
+        if (forwardGateWeights == null) return 0;
+        
+        // Count parameters for both directions
+        long params = forwardGateWeights.getSize();
+        if (forwardGateBias != null) params += forwardGateBias.getSize();
+        if (backwardGateWeights != null) params += backwardGateWeights.getSize();
+        if (backwardGateBias != null) params += backwardGateBias.getSize();
+        
+        return params;
     }
 
     @Override
@@ -241,7 +254,7 @@ public class BiLSTM implements Layer {
         }
 
         // Apply a dense transformation (simplified gates)
-        Tensor gates = denseGates(combined, 4 * units);
+        Tensor gates = denseGates(combined, true);
 
         // Split gates
         Tensor inputGate = new Tensor(new long[]{batchSize, units}, Tensor.DataType.FLOAT32);
@@ -310,18 +323,38 @@ public class BiLSTM implements Layer {
     }
 
     /**
-     * Applies dense transformation and sigmoid/tanh activations to gates.
+     * Applies dense transformation using stored gate weights.
      */
-    private Tensor denseGates(Tensor input, int outputSize) {
-        // Simplified: use random weights for demonstration
-        // In a full implementation, this would use learned weights
-        Tensor output = new Tensor(new long[]{input.getShape()[0], outputSize}, Tensor.DataType.FLOAT32);
-
-        long size = output.getSize();
-        for (long i = 0; i < size; i++) {
-            output.setFloat(i, (float) (Math.random() * 2 - 1));
+    private Tensor denseGates(Tensor input, boolean forward) {
+        // Use the stored gate weights instead of generating random ones
+        Tensor gateWeights = forward ? forwardGateWeights : backwardGateWeights;
+        Tensor gateBias = forward ? forwardGateBias : backwardGateBias;
+        
+        if (gateWeights == null) {
+            // Fallback to random if weights not initialized yet
+            Tensor output = new Tensor(new long[]{input.getShape()[0], 4 * units}, Tensor.DataType.FLOAT32);
+            long size = output.getSize();
+            for (long i = 0; i < size; i++) {
+                output.setFloat(i, (float) (Math.random() * 2 - 1));
+            }
+            return output;
         }
-
+        
+        // Compute: output = input * weights + bias
+        Tensor output = TensorOperations.matmul(input, gateWeights);
+        
+        // Add bias
+        long[] outputShape = output.getShape();
+        int batchSize = (int) outputShape[0];
+        int gateSize = (int) outputShape[1];
+        
+        for (int b = 0; b < batchSize; b++) {
+            for (int g = 0; g < gateSize; g++) {
+                float val = output.getFloat(b, g) + gateBias.getFloat(g);
+                output.setFloat(val, b, g);
+            }
+        }
+        
         return output;
     }
 
@@ -372,7 +405,24 @@ public class BiLSTM implements Layer {
         this.inputShape = shape.clone();
 
         int timeSteps = (int) shape[1];
-        int features = (int) shape[2];
+        this.inputFeatures = (int) shape[2];
+
+        // Initialize gate weights for both directions
+        // Gate weights shape: [inputFeatures + units, 4 * units]
+        int combinedSize = inputFeatures + units;
+        int gateSize = 4 * units;
+        
+        // Forward direction
+        forwardGateWeights = new Tensor(new long[]{combinedSize, gateSize}, Tensor.DataType.FLOAT32);
+        forwardGateWeights.randomNormal(0, 0.02f);
+        forwardGateBias = new Tensor(new long[]{gateSize}, Tensor.DataType.FLOAT32);
+        forwardGateBias.fill(0);
+        
+        // Backward direction
+        backwardGateWeights = new Tensor(new long[]{combinedSize, gateSize}, Tensor.DataType.FLOAT32);
+        backwardGateWeights.randomNormal(0, 0.02f);
+        backwardGateBias = new Tensor(new long[]{gateSize}, Tensor.DataType.FLOAT32);
+        backwardGateBias.fill(0);
 
         // Output shape depends on whether we return sequences
         if (returnSequences) {
@@ -409,22 +459,26 @@ public class BiLSTM implements Layer {
 
     @Override
     public Tensor getWeights() {
-        return forwardLSTM != null ? forwardLSTM.getWeights() : null;
+        return forwardGateWeights;
     }
 
     @Override
     public Tensor getBiases() {
-        return forwardLSTM != null ? forwardLSTM.getBiases() : null;
+        return forwardGateBias;
     }
 
     @Override
     public void setWeights(Tensor weights) {
-        // Simplified implementation
+        if (weights != null) {
+            this.forwardGateWeights = weights;
+        }
     }
 
     @Override
     public void setBiases(Tensor biases) {
-        // Simplified implementation
+        if (biases != null) {
+            this.forwardGateBias = biases;
+        }
     }
 
     @Override
@@ -441,12 +495,160 @@ public class BiLSTM implements Layer {
 
     @Override
     public byte[] serializeParameters() {
-        return new byte[0];
+        if (forwardGateWeights == null) {
+            return new byte[0];
+        }
+        
+        // Format: [forward weights][forward bias][backward weights][backward bias]
+        long[] fwShape = forwardGateWeights.getShape();
+        long[] fbShape = forwardGateBias != null ? forwardGateBias.getShape() : new long[0];
+        long[] bwShape = backwardGateWeights != null ? backwardGateWeights.getShape() : new long[0];
+        long[] bbShape = backwardGateBias != null ? backwardGateBias.getShape() : new long[0];
+        
+        int fwBytes = (int) (forwardGateWeights.getSize() * Float.BYTES);
+        int fbBytes = (int) (forwardGateBias != null ? forwardGateBias.getSize() * Float.BYTES : 0);
+        int bwBytes = (int) (backwardGateWeights != null ? backwardGateWeights.getSize() * Float.BYTES : 0);
+        int bbBytes = (int) (backwardGateBias != null ? backwardGateBias.getSize() * Float.BYTES : 0);
+        
+        int totalBytes = 4 + fwShape.length * 8 + fwBytes +
+                         4 + fbShape.length * 8 + fbBytes +
+                         4 + bwShape.length * 8 + bwBytes +
+                         4 + bbShape.length * 8 + bbBytes;
+        
+        java.nio.ByteBuffer buffer = java.nio.ByteBuffer.allocate(totalBytes);
+        buffer.order(java.nio.ByteOrder.LITTLE_ENDIAN);
+        
+        // Write forward weights
+        buffer.putInt(fwShape.length);
+        for (long dim : fwShape) buffer.putLong(dim);
+        for (long i = 0; i < forwardGateWeights.getSize(); i++) {
+            buffer.putFloat(forwardGateWeights.getFloat(i));
+        }
+        
+        // Write forward bias
+        buffer.putInt(fbShape.length);
+        for (long dim : fbShape) buffer.putLong(dim);
+        if (forwardGateBias != null) {
+            for (long i = 0; i < forwardGateBias.getSize(); i++) {
+                buffer.putFloat(forwardGateBias.getFloat(i));
+            }
+        }
+        
+        // Write backward weights
+        buffer.putInt(bwShape.length);
+        for (long dim : bwShape) buffer.putLong(dim);
+        if (backwardGateWeights != null) {
+            for (long i = 0; i < backwardGateWeights.getSize(); i++) {
+                buffer.putFloat(backwardGateWeights.getFloat(i));
+            }
+        }
+        
+        // Write backward bias
+        buffer.putInt(bbShape.length);
+        for (long dim : bbShape) buffer.putLong(dim);
+        if (backwardGateBias != null) {
+            for (long i = 0; i < backwardGateBias.getSize(); i++) {
+                buffer.putFloat(backwardGateBias.getFloat(i));
+            }
+        }
+        
+        return buffer.array();
     }
 
     @Override
     public void deserializeParameters(byte[] data) {
-        // Simplified implementation
+        if (data == null || data.length == 0) {
+            return;
+        }
+        
+        ByteBuffer buffer = ByteBuffer.wrap(data);
+        buffer.order(ByteOrder.LITTLE_ENDIAN);
+        
+        // Read forward weights (2D tensor)
+        int fwLen = buffer.getInt();
+        long[] fwShape = new long[fwLen];
+        for (int i = 0; i < fwLen; i++) fwShape[i] = buffer.getLong();
+        long fwSize = 1;
+        for (long dim : fwShape) fwSize *= dim;
+        forwardGateWeights = new Tensor(fwShape, Tensor.DataType.FLOAT32);
+        long counter = 0;
+        int rank = fwShape.length;
+        int[] indices = new int[rank];
+        for (long i = 0; i < fwSize; i++) {
+            float val = buffer.getFloat();
+            switch (rank) {
+                case 1: forwardGateWeights.setFloat(val, indices[0]); break;
+                case 2: forwardGateWeights.setFloat(val, indices[0], indices[1]); break;
+                default: forwardGateWeights.setFloat(val, i);
+            }
+            counter++;
+            for (int d = rank - 1; d >= 0; d--) {
+                indices[d]++;
+                if (d > 0 && indices[d] >= fwShape[d]) {
+                    indices[d] = 0;
+                } else {
+                    break;
+                }
+            }
+        }
+        
+        // Read forward bias (1D tensor)
+        int fbLen = buffer.getInt();
+        long[] fbShape = new long[fbLen];
+        for (int i = 0; i < fbLen; i++) fbShape[i] = buffer.getLong();
+        if (fbLen > 0) {
+            long fbSize = 1;
+            for (long dim : fbShape) fbSize *= dim;
+            forwardGateBias = new Tensor(fbShape, Tensor.DataType.FLOAT32);
+            for (long i = 0; i < fbSize; i++) {
+                forwardGateBias.setFloat(buffer.getFloat(), (int) i);
+            }
+        }
+        
+        // Read backward weights (2D tensor)
+        int bwLen = buffer.getInt();
+        long[] bwShape = new long[bwLen];
+        for (int i = 0; i < bwLen; i++) bwShape[i] = buffer.getLong();
+        if (bwLen > 0) {
+            long bwSize = 1;
+            for (long dim : bwShape) bwSize *= dim;
+            backwardGateWeights = new Tensor(bwShape, Tensor.DataType.FLOAT32);
+            counter = 0;
+            rank = bwShape.length;
+            indices = new int[rank];
+            for (long i = 0; i < bwSize; i++) {
+                float val = buffer.getFloat();
+                switch (rank) {
+                    case 1: backwardGateWeights.setFloat(val, indices[0]); break;
+                    case 2: backwardGateWeights.setFloat(val, indices[0], indices[1]); break;
+                    default: backwardGateWeights.setFloat(val, i);
+                }
+                counter++;
+                for (int d = rank - 1; d >= 0; d--) {
+                    indices[d]++;
+                    if (d > 0 && indices[d] >= bwShape[d]) {
+                        indices[d] = 0;
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
+        
+        // Read backward bias (1D tensor)
+        int bbLen = buffer.getInt();
+        long[] bbShape = new long[bbLen];
+        for (int i = 0; i < bbLen; i++) bbShape[i] = buffer.getLong();
+        if (bbLen > 0) {
+            long bbSize = 1;
+            for (long dim : bbShape) bbSize *= dim;
+            backwardGateBias = new Tensor(bbShape, Tensor.DataType.FLOAT32);
+            for (long i = 0; i < bbSize; i++) {
+                backwardGateBias.setFloat(buffer.getFloat(), (int) i);
+            }
+        }
+        
+        initialized = true;
     }
 
     @Override
@@ -460,6 +662,22 @@ public class BiLSTM implements Layer {
 
     @Override
     public void close() {
+        if (forwardGateWeights != null) {
+            forwardGateWeights.close();
+            forwardGateWeights = null;
+        }
+        if (forwardGateBias != null) {
+            forwardGateBias.close();
+            forwardGateBias = null;
+        }
+        if (backwardGateWeights != null) {
+            backwardGateWeights.close();
+            backwardGateWeights = null;
+        }
+        if (backwardGateBias != null) {
+            backwardGateBias.close();
+            backwardGateBias = null;
+        }
         if (forwardHiddenState != null) {
             forwardHiddenState.close();
             forwardHiddenState = null;
