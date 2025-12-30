@@ -68,22 +68,46 @@ public class CTCDecoder {
     /**
      * Decodes the network output using beam search.
      *
-     * @param input Network output tensor of shape [timeSteps, numClasses]
-     *            containing log probabilities for each character at each time step
+     * @param input Network output tensor of shape [timeSteps, numClasses] (2D)
+     *            or [batch, timeSteps, numClasses] (3D) containing log probabilities
+     *            for each character at each time step
      * @return Decoded text string
      */
     public String decode(Tensor input) {
         long[] shape = input.getShape();
-        int timeSteps = (int) shape[0];
-        int numClasses = (int) shape[1];
-
-        // Convert to log probabilities for numerical stability
-        float[][] logProbs = new float[timeSteps][numClasses];
-        for (int t = 0; t < timeSteps; t++) {
-            for (int c = 0; c < numClasses; c++) {
-                float prob = input.getFloat(t, c);
-                // Convert to log space with clipping
-                logProbs[t][c] = (float) Math.log(Math.max(prob, 1e-10f));
+        
+        // Handle 3D input [batch, timeSteps, numClasses]
+        // by extracting just the first batch element
+        int timeSteps, numClasses;
+        float[][] logProbs;
+        
+        if (shape.length == 3) {
+            // 3D input: [batch, timeSteps, numClasses]
+            int batchSize = (int) shape[0];
+            timeSteps = (int) shape[1];
+            numClasses = (int) shape[2];
+            
+            // Use first batch element
+            logProbs = new float[timeSteps][numClasses];
+            for (int t = 0; t < timeSteps; t++) {
+                for (int c = 0; c < numClasses; c++) {
+                    float prob = input.getFloat(0, t, c);
+                    // Convert to log space with clipping
+                    logProbs[t][c] = (float) Math.log(Math.max(prob, 1e-10f));
+                }
+            }
+        } else {
+            // 2D input: [timeSteps, numClasses]
+            timeSteps = (int) shape[0];
+            numClasses = (int) shape[1];
+            
+            logProbs = new float[timeSteps][numClasses];
+            for (int t = 0; t < timeSteps; t++) {
+                for (int c = 0; c < numClasses; c++) {
+                    float prob = input.getFloat(t, c);
+                    // Convert to log space with clipping
+                    logProbs[t][c] = (float) Math.log(Math.max(prob, 1e-10f));
+                }
             }
         }
 
@@ -132,7 +156,12 @@ public class CTCDecoder {
                     } else {
                         // Non-blank character
                         String charStr = labelToChar.get(c);
-                        
+
+                        // Safety check: if character not found, skip this path
+                        if (charStr == null || charStr.isEmpty()) {
+                            continue;  // Skip this character as it's not in vocabulary
+                        }
+
                         if (!prefix.isEmpty() && prefix.charAt(prefix.length() - 1) == charStr.charAt(0) && mergeRepeated) {
                             // Same as last character: extend without adding to prefix
                             BeamState newState = new BeamState();
@@ -220,10 +249,15 @@ public class CTCDecoder {
             }
         }
 
-        if (best != null) {
+        if (best != null && best.getValue().labels != null) {
             result.text = best.getKey();
             result.labels = best.getValue().labels;
             result.logProb = best.getValue().logProb;
+        } else {
+            // Fallback: return empty result
+            result.text = "";
+            result.labels = new ArrayList<>();
+            result.logProb = 0f;
         }
 
         return result;

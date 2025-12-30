@@ -20,7 +20,7 @@ import java.util.Arrays;
  * @version 1.0.0
  */
 public class BiLSTM implements Layer {
-    private final String name;
+    private String name;
     private final int units;
     private final boolean returnSequences;
     private final float dropoutRate;
@@ -35,6 +35,15 @@ public class BiLSTM implements Layer {
     private Tensor backwardHiddenState;
     private Tensor forwardCellState;
     private Tensor backwardCellState;
+
+    // Accumulator fields for pre-trained weight loading
+    // EasyOCR provides 4 separate tensors that need to be combined
+    private float[] accumulatorWForward;
+    private float[] accumulatorWForwardHidden;
+    private float[] accumulatorWReverse;
+    private float[] accumulatorWReverseHidden;
+    private boolean weightsAccumulated = false;
+    private int currentSequenceIndex = -1;
 
     private long[] inputShape;
     private long[] outputShape;
@@ -70,6 +79,11 @@ public class BiLSTM implements Layer {
     @Override
     public String getName() {
         return name;
+    }
+
+    @Override
+    public void setName(String name) {
+        this.name = name;
     }
 
     @Override
@@ -479,6 +493,195 @@ public class BiLSTM implements Layer {
         if (biases != null) {
             this.forwardGateBias = biases;
         }
+    }
+
+    /**
+     * Sets weights from pre-trained model (EasyOCR format).
+     * EasyOCR stores BiLSTM weights as 4 separate tensors:
+     * - weight_forward: [1024, 256] - input to gates for forward direction
+     * - weight_forward_hidden: [1024, 256] - hidden to gates for forward
+     * - weight_forward_reverse: [1024, 256] - input to gates for backward
+     * - weight_forward_hidden_reverse: [1024, 256] - hidden to gates for backward
+     * 
+     * This method combines them into the Java format:
+     * - forwardGateWeights: [input+units, 4*units] = [512, 1024]
+     * - backwardGateWeights: [input+units, 4*units] = [512, 1024]
+     * 
+     * @param weights Flattened weight array from pre-trained model
+     * @param biases Flattened bias array from pre-trained model (can be null)
+     */
+    /**
+     * Sets weights from pre-trained model (EasyOCR format) with layer name identification.
+     * This version identifies which of the 4 BiLSTM weight tensors is being loaded.
+     *
+     * @param weights Flattened weight array from pre-trained model
+     * @param biases Flattened bias array from pre-trained model (can be null)
+     * @param layerName The name of the layer from the pre-trained model (e.g., "SequenceModeling.0.rnn.weight_forward")
+     */
+    public void setWeightsFromPreTrained(float[] weights, float[] biases, String layerName) {
+        if (weights == null || weights.length == 0) {
+            return;
+        }
+
+        // EasyOCR BiLSTM weight format: [output_size, input_size] = [1024, 256]
+        int easyOcrOutput = 1024;  // 4 gates * 256 hidden
+        int easyOcrInput = 256;    // 256 features per direction
+        int singleTensorSize = easyOcrOutput * easyOcrInput;  // 1024 * 256 = 262,144
+
+        if (inputShape == null || inputFeatures == 0) {
+            this.inputFeatures = 256;
+            this.inputShape = new long[]{1, 10, this.inputFeatures};
+        }
+
+        int combinedSize = inputFeatures + units;  // 256 + 256 = 512
+        int gateSize = 4 * units;                  // 4 * 256 = 1024
+
+        // Extract sequence index from layer name (e.g., "SequenceModeling.0.rnn.weight_forward")
+        int incomingSeqIndex = -1;
+        java.util.regex.Pattern seqPattern = java.util.regex.Pattern.compile("sequencemodeling\\.(\\d+)\\.");
+        java.util.regex.Matcher seqMatcher = seqPattern.matcher(layerName.toLowerCase());
+        if (seqMatcher.find()) {
+            incomingSeqIndex = Integer.parseInt(seqMatcher.group(1));
+        }
+
+        System.out.println("BiLSTM: Processing " + layerName + " (seqIndex=" + incomingSeqIndex + ")");
+
+        // Identify which component this is based on layer name
+        boolean isForward = layerName.contains("forward");
+        boolean isReverse = layerName.contains("reverse") || layerName.contains("_reverse");
+        boolean isHidden = layerName.contains("hidden");
+
+        // If this is a different sequence than what we've been loading, reset accumulators
+        if (incomingSeqIndex != currentSequenceIndex && incomingSeqIndex >= 0) {
+            System.out.println("BiLSTM: Switching to sequence " + incomingSeqIndex + ", resetting accumulators");
+            accumulatorWForward = null;
+            accumulatorWForwardHidden = null;
+            accumulatorWReverse = null;
+            accumulatorWReverseHidden = null;
+            weightsAccumulated = false;
+            currentSequenceIndex = incomingSeqIndex;
+        }
+
+        // Initialize accumulators if needed
+        if (accumulatorWForward == null) {
+            accumulatorWForward = new float[singleTensorSize];
+            accumulatorWForwardHidden = new float[singleTensorSize];
+            accumulatorWReverse = new float[singleTensorSize];
+            accumulatorWReverseHidden = new float[singleTensorSize];
+            weightsAccumulated = false;
+        }
+
+        // Store the weights in the appropriate accumulator
+        if (isForward && !isHidden) {
+            System.out.println("BiLSTM: Storing weight_forward component");
+            System.arraycopy(weights, 0, accumulatorWForward, 0, singleTensorSize);
+        } else if (isForward && isHidden) {
+            System.out.println("BiLSTM: Storing weight_forward_hidden component");
+            System.arraycopy(weights, 0, accumulatorWForwardHidden, 0, singleTensorSize);
+        } else if (!isForward && !isReverse && !isHidden) {
+            // "forward" in name but not reverse or hidden - treat as forward input
+            System.out.println("BiLSTM: Storing forward input component");
+            System.arraycopy(weights, 0, accumulatorWForward, 0, singleTensorSize);
+        } else if (isReverse && isHidden) {
+            System.out.println("BiLSTM: Storing weight_forward_hidden_reverse component");
+            System.arraycopy(weights, 0, accumulatorWReverseHidden, 0, singleTensorSize);
+        } else if (isReverse) {
+            System.out.println("BiLSTM: Storing weight_forward_reverse component");
+            System.arraycopy(weights, 0, accumulatorWReverse, 0, singleTensorSize);
+        } else {
+            // Fallback - store based on which accumulators are empty
+            System.out.println("BiLSTM: Storing using fallback logic");
+            if (accumulatorWForward[0] == 0) {
+                System.arraycopy(weights, 0, accumulatorWForward, 0, singleTensorSize);
+            } else if (accumulatorWForwardHidden[0] == 0) {
+                System.arraycopy(weights, 0, accumulatorWForwardHidden, 0, singleTensorSize);
+            } else if (accumulatorWReverse[0] == 0) {
+                System.arraycopy(weights, 0, accumulatorWReverse, 0, singleTensorSize);
+            } else {
+                System.arraycopy(weights, 0, accumulatorWReverseHidden, 0, singleTensorSize);
+            }
+        }
+
+        // Check if all 4 tensors are available
+        boolean hasAll = accumulatorWForward[0] != 0 &&
+                         accumulatorWForwardHidden[0] != 0 &&
+                         accumulatorWReverse[0] != 0 &&
+                         accumulatorWReverseHidden[0] != 0;
+
+        if (!hasAll) {
+            System.out.println("BiLSTM: Waiting for more weight components...");
+            return;
+        }
+
+        // All 4 tensors are available, combine them
+        System.out.println("BiLSTM: All 4 weight components available, combining for sequence " + incomingSeqIndex + "...");
+
+        // Create combined weights: [input+units, 4*units] = [512, 1024]
+        // EasyOCR stores [output, input] = [1024, 256]
+        // We need to transpose and combine for Java [input, output] = [512, 1024]
+
+        // For forward: combine wForward and wForwardHidden
+        forwardGateWeights = new Tensor(new long[]{combinedSize, gateSize}, Tensor.DataType.FLOAT32);
+        for (int oc = 0; oc < 1024; oc++) {
+            for (int ic = 0; ic < 256; ic++) {
+                float val = accumulatorWForward[oc * 256 + ic];
+                forwardGateWeights.setFloat(val, ic, oc);
+                val = accumulatorWForwardHidden[oc * 256 + ic];
+                forwardGateWeights.setFloat(val, 256 + ic, oc);
+            }
+        }
+
+        // For backward: combine wReverse and wReverseHidden
+        backwardGateWeights = new Tensor(new long[]{combinedSize, gateSize}, Tensor.DataType.FLOAT32);
+        for (int oc = 0; oc < 1024; oc++) {
+            for (int ic = 0; ic < 256; ic++) {
+                float val = accumulatorWReverse[oc * 256 + ic];
+                backwardGateWeights.setFloat(val, ic, oc);
+                val = accumulatorWReverseHidden[oc * 256 + ic];
+                backwardGateWeights.setFloat(val, 256 + ic, oc);
+            }
+        }
+
+        weightsAccumulated = true;
+
+        // Set biases if provided
+        if (biases != null && biases.length >= gateSize) {
+            forwardGateBias = new Tensor(new long[]{gateSize}, Tensor.DataType.FLOAT32);
+            for (int i = 0; i < gateSize; i++) {
+                forwardGateBias.setFloat(biases[i], i);
+            }
+
+            if (biases.length >= 2 * gateSize) {
+                backwardGateBias = new Tensor(new long[]{gateSize}, Tensor.DataType.FLOAT32);
+                for (int i = 0; i < gateSize; i++) {
+                    backwardGateBias.setFloat(biases[gateSize + i], i);
+                }
+            } else {
+                backwardGateBias = new Tensor(new long[]{gateSize}, Tensor.DataType.FLOAT32);
+                backwardGateBias.fill(0);
+            }
+        } else {
+            forwardGateBias = new Tensor(new long[]{gateSize}, Tensor.DataType.FLOAT32);
+            forwardGateBias.fill(0);
+            backwardGateBias = new Tensor(new long[]{gateSize}, Tensor.DataType.FLOAT32);
+            backwardGateBias.fill(0);
+        }
+
+        // Set output shape
+        int timeSteps = inputShape != null && inputShape.length > 1 ? (int) inputShape[1] : 10;
+        if (returnSequences) {
+            outputShape = new long[]{-1, timeSteps, units * 2};
+        } else {
+            outputShape = new long[]{-1, units * 2};
+        }
+
+        initialized = true;
+    }
+
+    public void setWeightsFromPreTrained(float[] weights, float[] biases) {
+        // Default implementation without layer name - try to infer from weights
+        // This is a fallback for backward compatibility
+        setWeightsFromPreTrained(weights, biases, "unknown");
     }
 
     @Override

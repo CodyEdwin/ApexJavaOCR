@@ -10,8 +10,8 @@ application {
 }
 
 java {
-    sourceCompatibility = JavaVersion.VERSION_21
-    targetCompatibility = JavaVersion.VERSION_21
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
 }
 
 repositories {
@@ -34,6 +34,11 @@ tasks.withType<JavaCompile> {
         "-Xlint:unchecked",
         "-Xlint:deprecation"
     ))
+}
+
+tasks.named<JavaExec>("run") {
+    maxHeapSize = "4g"
+    jvmArgs = listOf("-Xmx4g", "-Xms2g")
 }
 
 tasks.named<Test>("test") {

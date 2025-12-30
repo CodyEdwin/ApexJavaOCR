@@ -16,7 +16,7 @@ import java.util.Arrays;
  * @version 1.0.0
  */
 public class MaxPool2D implements Layer {
-    private final String name;
+    private String name;
     private final int[] poolSize;
     private final int[] strides;
     private final int[] padding;
@@ -55,6 +55,11 @@ public class MaxPool2D implements Layer {
     @Override
     public String getName() {
         return name;
+    }
+
+    @Override
+    public void setName(String name) {
+        this.name = name;
     }
 
     @Override

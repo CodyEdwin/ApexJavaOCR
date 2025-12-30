@@ -21,7 +21,7 @@ import java.util.concurrent.ThreadLocalRandom;
  * @version 1.0.0
  */
 public class Dense implements Layer {
-    private final String name;
+    private String name;
     private final int units;
     private final ActivationType activation;
     private final boolean useBias;
@@ -79,6 +79,11 @@ public class Dense implements Layer {
     }
 
     @Override
+    public void setName(String name) {
+        this.name = name;
+    }
+
+    @Override
     public LayerType getType() {
         return LayerType.DENSE;
     }
@@ -116,12 +121,6 @@ public class Dense implements Layer {
 
     @Override
     public Tensor forward(Tensor input) {
-        // Lazy initialization on first forward pass
-        if (weights == null) {
-            setInputShape(input.getShape());
-            initialize(Initializer.HE_NORMAL);
-        }
-
         // Cache input for potential gradient computation
         if (training) {
             inputCache = input.copy();
@@ -129,6 +128,85 @@ public class Dense implements Layer {
 
         long[] inputShape = input.getShape();
         long batchSize = inputShape[0];
+
+        // Lazy initialization on first forward pass
+        if (weights == null) {
+            setInputShape(inputShape);
+            
+            // For 3D input [batch, timeSteps, features], initialize weights for features dimension only
+            // For 2D input [batch, features], use the full input size
+            if (inputShape.length == 3) {
+                // Create weights tensor with shape [features, units]
+                long features = inputShape[2];
+                this.weights = new Tensor(new long[]{features, units}, Tensor.DataType.FLOAT32);
+                initializeWeightsTensor(this.weights);
+                
+                // Create bias if needed
+                if (useBias) {
+                    this.bias = new Tensor(new long[]{units}, Tensor.DataType.FLOAT32);
+                    this.bias.fill(0);
+                }
+            } else {
+                // Original initialization for 2D input
+                initialize(Initializer.HE_NORMAL);
+            }
+        }
+
+        // Handle 3D input [batch, timeSteps, features] from BiLSTM
+        // Apply Dense transformation to each time step independently
+        if (inputShape.length == 3) {
+            long timeSteps = inputShape[1];
+            long features = inputShape[2];
+
+            // Output shape: [batch, timeSteps, units]
+            outputShape = new long[]{batchSize, timeSteps, units};
+            Tensor output = new Tensor(outputShape, Tensor.DataType.FLOAT32);
+
+            // Apply Dense to each time step
+            for (long t = 0; t < timeSteps; t++) {
+                // Extract time step t: [batch, features]
+                Tensor timeStepInput = new Tensor(new long[]{batchSize, features}, Tensor.DataType.FLOAT32);
+                for (long b = 0; b < batchSize; b++) {
+                    for (long f = 0; f < features; f++) {
+                        timeStepInput.setFloat(input.getFloat(b, t, f), b, f);
+                    }
+                }
+
+                // Compute: output = input * weights + bias
+                Tensor timeStepOutput = TensorOperations.matmul(timeStepInput, weights);
+
+                if (useBias) {
+                    for (long b = 0; b < batchSize; b++) {
+                        for (int u = 0; u < units; u++) {
+                            float val = timeStepOutput.getFloat(b, u) + bias.getFloat(u);
+                            timeStepOutput.setFloat(val, b, u);
+                        }
+                    }
+                }
+
+                // Copy to output
+                for (long b = 0; b < batchSize; b++) {
+                    for (int u = 0; u < units; u++) {
+                        output.setFloat(timeStepOutput.getFloat(b, u), b, t, u);
+                    }
+                }
+
+                timeStepInput.close();
+                timeStepOutput.close();
+            }
+
+            // Apply activation
+            Tensor activated = applyActivation(output);
+
+            // Cache output for training
+            if (training) {
+                outputCache = activated;
+            }
+
+            return activated;
+        }
+
+        // Handle 2D input [batch, inputSize] - original behavior
         long inputSize = 1;
         for (int i = 1; i < inputShape.length; i++) {
             inputSize *= inputShape[i];
@@ -260,6 +338,85 @@ public class Dense implements Layer {
         this.bias = biases;
     }
 
+    /**
+     * Sets weights from pre-trained model (EasyOCR format).
+     * EasyOCR/PyTorch stores Dense weights as [output, input].
+     * Java expects weights as [input, output] for matmul(input, weights).
+     * This method handles the conversion correctly.
+     *
+     * @param weights Flattened weight array from pre-trained model
+     * @param biases Flattened bias array from pre-trained model (can be null)
+     */
+    public void setWeightsFromPreTrained(float[] weights, float[] biases) {
+        if (weights == null || weights.length == 0) {
+            return;
+        }
+
+        // Get expected dimensions from current layer configuration
+        int expectedInputSize;
+        int expectedOutputSize = this.units;
+        
+        if (inputShape != null && inputShape.length >= 2) {
+            // Use the already-configured input size from the network architecture
+            expectedInputSize = (int) inputShape[inputShape.length - 1];
+        } else {
+            // Infer input units from weight array: input = total / output
+            // Weight format from EasyOCR: [output, input] = total elements
+            expectedInputSize = weights.length / expectedOutputSize;
+        }
+
+        int expectedTotalWeights = expectedInputSize * expectedOutputSize;
+
+        // Validate that weights array size matches expected dimensions
+        if (weights.length != expectedTotalWeights) {
+            throw new IllegalArgumentException(
+                String.format("Weight array size mismatch: expected %d elements (input=%d, output=%d), got %d elements. " +
+                              "This usually means the BiLSTM output dimension (%d) doesn't match the Dense layer input expectation.",
+                              expectedTotalWeights, expectedInputSize, expectedOutputSize, weights.length, expectedInputSize));
+        }
+
+        // EasyOCR stores weights as [output, input] (PyTorch convention)
+        // We need to convert to Java's [input, output] format for matmul
+        // Reuse existing weights tensor if dimensions match, otherwise create new one
+        if (this.weights == null || this.weights.getShape()[0] != expectedInputSize || 
+            this.weights.getShape()[1] != expectedOutputSize) {
+            this.weights = new Tensor(new long[]{expectedInputSize, expectedOutputSize}, Tensor.DataType.FLOAT32);
+        }
+
+        // Copy weights, transposing from [output, input] to [input, output]
+        for (int out = 0; out < expectedOutputSize; out++) {
+            for (int in = 0; in < expectedInputSize; in++) {
+                // EasyOCR: [output, input] -> flat index = out * inputSize + in
+                // Java: [input, output] -> flat index = in * outputSize + out
+                float val = weights[out * expectedInputSize + in];
+                this.weights.setFloat(val, in, out);
+            }
+        }
+
+        // Set bias if provided
+        if (biases != null && biases.length >= expectedOutputSize && useBias) {
+            if (this.bias == null || this.bias.getShape()[0] != expectedOutputSize) {
+                this.bias = new Tensor(new long[]{expectedOutputSize}, Tensor.DataType.FLOAT32);
+            }
+            for (int i = 0; i < expectedOutputSize; i++) {
+                this.bias.setFloat(biases[i], i);
+            }
+        } else if (useBias) {
+            // Initialize zero bias
+            if (this.bias == null || this.bias.getShape()[0] != expectedOutputSize) {
+                this.bias = new Tensor(new long[]{expectedOutputSize}, Tensor.DataType.FLOAT32);
+            }
+            this.bias.fill(0);
+        }
+
+        // Update output shape for 3D input
+        if (inputShape != null && inputShape.length == 3) {
+            outputShape = new long[]{inputShape[0], inputShape[1], expectedOutputSize};
+        } else {
+            outputShape = new long[]{-1, expectedOutputSize};
+        }
+    }
+
     @Override
     public void initialize(Initializer initializer) {
         if (inputShape == null) {
@@ -319,6 +476,16 @@ public class Dense implements Layer {
                 orthogonal(weights);
                 break;
         }
+    }
+
+    /**
+     * Helper method to initialize a weights tensor directly with He normal initialization.
+     * Used for 3D input handling where we need to initialize based on features dimension only.
+     */
+    private void initializeWeightsTensor(Tensor tensor) {
+        long fanIn = tensor.getShape()[0];
+        float std = (float) Math.sqrt(2.0 / fanIn);
+        tensor.randomNormal(0, std);
     }
 
     /**

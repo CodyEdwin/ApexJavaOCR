@@ -16,7 +16,7 @@ import java.util.Arrays;
  * @version 1.0.0
  */
 public class ReshapeLayer implements Layer {
-    private final String name = "reshape";
+    private String name = "reshape";
     private long[] inputShape;
     private long[] outputShape;
 
@@ -29,6 +29,11 @@ public class ReshapeLayer implements Layer {
     @Override
     public String getName() {
         return name;
+    }
+
+    @Override
+    public void setName(String name) {
+        this.name = name;
     }
 
     @Override

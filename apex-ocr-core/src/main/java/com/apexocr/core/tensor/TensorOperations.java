@@ -463,6 +463,34 @@ public final class TensorOperations {
                     result.setFloat(result.getFloat(b, c) / sum, b, c);
                 }
             }
+        } else if (shape.length == 3) {
+            // Handle 3D tensor [batch, timeSteps, numClasses]
+            long batchSize = shape[0];
+            long timeSteps = shape[1];
+            long numClasses = shape[2];
+
+            for (long b = 0; b < batchSize; b++) {
+                for (long t = 0; t < timeSteps; t++) {
+                    // Find max for numerical stability
+                    float max = Float.NEGATIVE_INFINITY;
+                    for (long c = 0; c < numClasses; c++) {
+                        max = Math.max(max, a.getFloat(b, t, c));
+                    }
+
+                    // Compute exp and sum
+                    float sum = 0;
+                    for (long c = 0; c < numClasses; c++) {
+                        float exp = (float) Math.exp(a.getFloat(b, t, c) - max);
+                        result.setFloat(exp, b, t, c);
+                        sum += exp;
+                    }
+
+                    // Normalize
+                    for (long c = 0; c < numClasses; c++) {
+                        result.setFloat(result.getFloat(b, t, c) / sum, b, t, c);
+                    }
+                }
+            }
         }
 
         return result;

@@ -23,6 +23,45 @@ public class DemoMain {
      */
     private static final String DEMO_WEIGHTS = "demo-weights.bin";
     
+    /**
+     * Looks for a weights file in multiple locations.
+     * Checks: current directory, parent directory (project root)
+     * 
+     * @param fileName The weights file name
+     * @return Full path to the weights file, or null if not found
+     */
+    private static String findWeightsFile(String fileName) {
+        // Check current directory
+        File currentDir = new File(fileName);
+        if (currentDir.exists()) {
+            return currentDir.getAbsolutePath();
+        }
+        
+        // Check parent directory (project root)
+        File parentDir = new File(".." + File.separator + fileName);
+        if (parentDir.exists()) {
+            return parentDir.getAbsolutePath();
+        }
+        
+        // Check common project locations
+        String[] possiblePaths = {
+            fileName,
+            ".." + File.separator + fileName,
+            "." + File.separator + fileName,
+            System.getProperty("user.dir") + File.separator + fileName,
+            System.getProperty("user.dir") + File.separator + ".." + File.separator + fileName
+        };
+        
+        for (String path : possiblePaths) {
+            File f = new File(path);
+            if (f.exists()) {
+                return f.getAbsolutePath();
+            }
+        }
+        
+        return null;
+    }
+    
     public static void main(String[] args) {
         if (args.length < 1) {
             System.out.println("Usage: java DemoMain <image_path> [weights_path]");
@@ -58,6 +97,16 @@ public class DemoMain {
                 System.out.println("\nNetwork Architecture:");
                 System.out.println(engine.getArchitectureSummary());
                 
+                // Run a warm-up inference to trigger lazy initialization of all weights
+                // This is necessary to set proper input/output shapes in all layers
+                System.out.println("\nRunning warm-up inference to initialize network shapes...");
+                OcrResult warmup = engine.process(image);
+                System.out.println("Warm-up result: \"" + warmup.getText() + "\" (" + warmup.getProcessingTimeMs() + "ms)");
+                
+                // Now show the initialized architecture
+                System.out.println("\nInitialized Network:");
+                System.out.println(engine.getArchitectureSummary());
+                
                 // Determine which weights to load
                 String weightsToLoad = null;
                 boolean usingPretrained = false;
@@ -66,19 +115,25 @@ public class DemoMain {
                     // Use custom weights if provided and exists
                     weightsToLoad = customWeightsPath;
                     System.out.println("\nUsing custom weights: " + weightsToLoad);
-                } else if (new File(PRETRAINED_WEIGHTS).exists()) {
-                    // Try pre-trained EasyOCR weights
-                    weightsToLoad = PRETRAINED_WEIGHTS;
-                    usingPretrained = true;
-                    System.out.println("\nLoading pre-trained EasyOCR English weights...");
-                } else if (new File(DEMO_WEIGHTS).exists()) {
-                    // Fall back to demo weights
-                    weightsToLoad = DEMO_WEIGHTS;
-                    System.out.println("\nLoading demo weights...");
                 } else {
-                    // Generate demo weights
-                    System.out.println("\nNo weights file found, generating demo weights...");
-                    engine.generateDemoWeights();
+                    // Try pre-trained EasyOCR weights
+                    String pretrainedPath = findWeightsFile(PRETRAINED_WEIGHTS);
+                    if (pretrainedPath != null) {
+                        weightsToLoad = pretrainedPath;
+                        usingPretrained = true;
+                        System.out.println("\nLoading pre-trained EasyOCR English weights from: " + weightsToLoad);
+                    } else {
+                        // Try demo weights
+                        String demoPath = findWeightsFile(DEMO_WEIGHTS);
+                        if (demoPath != null) {
+                            weightsToLoad = demoPath;
+                            System.out.println("\nLoading demo weights from: " + weightsToLoad);
+                        } else {
+                            // Generate demo weights
+                            System.out.println("\nNo weights file found, generating demo weights...");
+                            engine.generateDemoWeights();
+                        }
+                    }
                 }
                 
                 // Load weights if we found a file

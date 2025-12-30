@@ -22,6 +22,14 @@ public interface Layer {
      * @return The layer name
      */
     String getName();
+    
+    /**
+     * Sets the name of this layer for identification and debugging.
+     * This is useful for matching layers with pre-trained weights.
+     *
+     * @param name The new layer name
+     */
+    void setName(String name);
 
     /**
      * Gets the type identifier for this layer.

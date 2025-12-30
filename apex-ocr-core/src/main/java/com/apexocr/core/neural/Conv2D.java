@@ -20,7 +20,7 @@ import java.util.concurrent.ThreadLocalRandom;
  * @version 1.0.0
  */
 public class Conv2D implements Layer {
-    private final String name;
+    private String name;
     private final int filters;
     private final int[] kernelSize;
     private final int[] strides;
@@ -87,6 +87,11 @@ public class Conv2D implements Layer {
     }
 
     @Override
+    public void setName(String name) {
+        this.name = name;
+    }
+
+    @Override
     public LayerType getType() {
         return LayerType.CONV2D;
     }
@@ -104,7 +109,23 @@ public class Conv2D implements Layer {
     @Override
     public long getParameterCount() {
         if (!initialized) return 0;
-
+        
+        // If kernels tensor exists, calculate from its shape
+        if (kernels != null) {
+            long[] shape = kernels.getShape();
+            long kernelParams = 1;
+            for (long dim : shape) {
+                kernelParams *= dim;
+            }
+            long biasParams = useBias() ? filters : 0;
+            return kernelParams + biasParams;
+        }
+        
+        // Fallback: calculate from inputShape (may be null)
+        if (inputShape == null || inputShape.length < 4) {
+            return 0;
+        }
+        
         long kernelParams = kernelSize[0] * kernelSize[1] * inputShape[3] / groups * filters;
         long biasParams = useBias() ? filters : 0;
 
@@ -355,6 +376,123 @@ public class Conv2D implements Layer {
     @Override
     public void setBiases(Tensor biases) {
         this.bias = biases;
+    }
+
+    /**
+     * Sets weights from pre-trained model (EasyOCR format).
+     * The Python converter provides weights in [h, w, in_ch, out_ch] format.
+     * This method converts to and expects [out_ch, in_ch, h, w] for internal use.
+     * 
+     * @param weights Flattened weight array from pre-trained model
+     * @param biases Flattened bias array from pre-trained model (can be null)
+     */
+    public void setWeightsFromPreTrained(float[] weights, float[] biases) {
+        if (weights == null || weights.length == 0) {
+            return;
+        }
+
+        int kh = kernelSize[0];
+        int kw = kernelSize[1];
+        int outCh = filters;
+
+        // Determine input channels
+        int inCh;
+        if (this.inputShape != null && this.inputShape.length >= 4) {
+            inCh = (int) this.inputShape[3];
+        } else {
+            inCh = weights.length / (kh * kw * outCh);
+        }
+
+        int expectedSize = kh * kw * inCh * outCh;
+
+        if (weights.length == expectedSize) {
+            // Weights are in EasyOCR format [h, w, in_ch, out_ch]
+            long[] kernelShape = new long[]{kh, kw, inCh, outCh};
+            kernels = new Tensor(kernelShape, Tensor.DataType.FLOAT32);
+
+            // Convert from [h, w, in_ch, out_ch] flat array to tensor
+            for (int h = 0; h < kh; h++) {
+                for (int w = 0; w < kw; w++) {
+                    for (int ic = 0; ic < inCh; ic++) {
+                        for (int oc = 0; oc < outCh; oc++) {
+                            int srcIndex = ((h * kw + w) * inCh + ic) * outCh + oc;
+                            kernels.setFloat(weights[srcIndex], h, w, ic, oc);
+                        }
+                    }
+                }
+            }
+        } else if (weights.length == kh * kw * outCh * inCh) {
+            // Weights might be in PyTorch format [out_ch, in_ch, h, w]
+            // where the calculation kh*kw*outCh*inCh gives the same result
+            // but we need to handle it differently
+            long[] kernelShape = new long[]{kh, kw, inCh, outCh};
+            kernels = new Tensor(kernelShape, Tensor.DataType.FLOAT32);
+
+            // Transpose from [out_ch, in_ch, h, w] to [h, w, in_ch, out_ch]
+            for (int h = 0; h < kh; h++) {
+                for (int w = 0; w < kw; w++) {
+                    for (int ic = 0; ic < inCh; ic++) {
+                        for (int oc = 0; oc < outCh; oc++) {
+                            int srcIndex = ((oc * inCh + ic) * kh + h) * kw + w;
+                            kernels.setFloat(weights[srcIndex], h, w, ic, oc);
+                        }
+                    }
+                }
+            }
+        } else {
+            // Weight size doesn't match expected - try recovery
+            System.out.println("WARNING: " + name + " weight size mismatch. Expected " + expectedSize +
+                               " but got " + weights.length);
+
+            // Try treating as PyTorch format with swapped in_ch/out_ch
+            int swappedInCh = outCh;
+            int swappedOutCh = inCh;
+            int swappedExpected = kh * kw * swappedInCh * swappedOutCh;
+
+            if (weights.length == swappedExpected) {
+                System.out.println("Attempting recovery with swapped channels...");
+                long[] kernelShape = new long[]{kh, kw, swappedInCh, swappedOutCh};
+                kernels = new Tensor(kernelShape, Tensor.DataType.FLOAT32);
+
+                for (int h = 0; h < kh; h++) {
+                    for (int w = 0; w < kw; w++) {
+                        for (int ic = 0; ic < swappedInCh; ic++) {
+                            for (int oc = 0; oc < swappedOutCh; oc++) {
+                                int srcIndex = ((oc * swappedInCh + ic) * kh + h) * kw + w;
+                                kernels.setFloat(weights[srcIndex], h, w, ic, oc);
+                            }
+                        }
+                    }
+                }
+                System.out.println("Recovered " + name + " as PyTorch format with inCh=" + swappedInCh);
+            } else {
+                System.out.println("ERROR: Cannot recover " + name + " - weight size doesn't match any known format");
+            }
+        }
+        
+        // Set bias if provided
+        if (biases != null && biases.length == outCh) {
+            this.bias = new Tensor(new long[]{outCh}, Tensor.DataType.FLOAT32);
+            for (int i = 0; i < outCh; i++) {
+                this.bias.setFloat(biases[i], i);
+            }
+        } else if (outCh > 0) {
+            // Initialize zero bias
+            this.bias = new Tensor(new long[]{outCh}, Tensor.DataType.FLOAT32);
+            this.bias.fill(0);
+        }
+        
+        // Set output shape
+        if (inputShape != null && inputShape.length >= 4) {
+            int outputHeight = calculateOutputSize((int) inputShape[1], kernelSize[0], strides[0], padding[0], dilation[0]);
+            int outputWidth = calculateOutputSize((int) inputShape[2], kernelSize[1], strides[1], padding[1], dilation[1]);
+            outputShape = new long[]{-1, outputHeight, outputWidth, filters};
+        } else {
+            // Default output shape when inputShape is unknown
+            outputShape = new long[]{-1, -1, -1, filters};
+        }
+        
+        initialized = true;
     }
 
     @Override
