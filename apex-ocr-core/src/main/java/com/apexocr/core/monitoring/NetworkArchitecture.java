@@ -1,11 +1,11 @@
-package com.apexocr.training.monitoring;
+package com.apexocr.core.monitoring;
 
 import java.util.List;
 import java.util.ArrayList;
 
 /**
  * Description of the neural network architecture for visualization.
- * Contains layer information needed to render the 3D network structure.
+ * Contains layer information needed to render the 2D network structure.
  */
 public class NetworkArchitecture {
     

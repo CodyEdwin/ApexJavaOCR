@@ -1,4 +1,4 @@
-package com.apexocr.training.monitoring;
+package com.apexocr.core.monitoring;
 
 import java.util.Map;
 import java.util.Optional;

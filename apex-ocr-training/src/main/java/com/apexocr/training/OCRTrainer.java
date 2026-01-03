@@ -7,8 +7,9 @@ import com.apexocr.core.neural.Conv2D;
 import com.apexocr.core.neural.Dense;
 import com.apexocr.core.neural.BiLSTM;
 import com.apexocr.engine.OcrEngine;
+import com.apexocr.core.monitoring.*;
 import com.apexocr.training.monitoring.*;
-// import com.apexocr.visualization.NeuralNetworkVisualizer;
+import com.apexocr.visualization.NeuralNetworkVisualizer;
 
 import javax.imageio.ImageIO;
 import java.awt.Graphics2D;
@@ -107,7 +108,7 @@ public class OCRTrainer {
         this.visualizationEnabled = enable;
         if (enable) {
             initializeMonitoring();
-            // initializeVisualization(); // Temporarily disabled until libgdx deps are resolved
+            initializeVisualization();
         }
     }
     
@@ -130,7 +131,6 @@ public class OCRTrainer {
     /**
      * Initialize 3D visualization.
      */
-    /*
     private void initializeVisualization() {
         // Create network architecture for visualization
         NetworkArchitecture architecture = createNetworkArchitecture();
@@ -140,7 +140,6 @@ public class OCRTrainer {
         // Open visualization window
         NeuralNetworkVisualizer.openForTraining(architecture);
     }
-    */
     
     /**
      * Create network architecture description for visualization.
@@ -152,12 +151,12 @@ public class OCRTrainer {
         int layerIndex = 0;
         for (Layer layer : engine.getNetwork()) {
             String layerName = layer.getName();
-            com.apexocr.training.monitoring.LayerSnapshot.LayerType type;
+            com.apexocr.core.monitoring.LayerSnapshot.LayerType type;
             int inputChannels = 0, outputChannels = 0, height = 0, width = 0;
             int parameters = 0;
             
             if (layer instanceof Conv2D) {
-                type = com.apexocr.training.monitoring.LayerSnapshot.LayerType.CONV2D;
+                type = com.apexocr.core.monitoring.LayerSnapshot.LayerType.CONV2D;
                 Conv2D conv = (Conv2D) layer;
                 long[] wShape = conv.getWeights().getShape();
                 inputChannels = (int) wShape[0];
@@ -166,19 +165,19 @@ public class OCRTrainer {
                 width = 64; // Placeholder
                 parameters = (int) conv.getWeights().getSize();
             } else if (layer instanceof BiLSTM) {
-                type = com.apexocr.training.monitoring.LayerSnapshot.LayerType.BILSTM;
+                type = com.apexocr.core.monitoring.LayerSnapshot.LayerType.BILSTM;
                 BiLSTM lstm = (BiLSTM) layer;
                 long[] wShape = lstm.getWeights().getShape();
                 outputChannels = (int) wShape[wShape.length - 1];
                 parameters = (int) lstm.getWeights().getSize();
             } else if (layer instanceof Dense) {
-                type = com.apexocr.training.monitoring.LayerSnapshot.LayerType.DENSE;
+                type = com.apexocr.core.monitoring.LayerSnapshot.LayerType.DENSE;
                 Dense dense = (Dense) layer;
                 long[] wShape = dense.getWeights().getShape();
                 outputChannels = (int) wShape[wShape.length - 1];
                 parameters = (int) dense.getWeights().getSize();
             } else {
-                type = com.apexocr.training.monitoring.LayerSnapshot.LayerType.ACTIVATION;
+                type = com.apexocr.core.monitoring.LayerSnapshot.LayerType.ACTIVATION;
             }
             
             float xPos = (layerIndex - engine.getNetwork().size() / 2f) * 3f;
@@ -458,13 +457,11 @@ public class OCRTrainer {
                 }
                 
                 // Push snapshot to visualization service
-                /*
                 if (visualizationService != null) {
                     pushTrainingSnapshot(epoch, epochs, batchesProcessed, 
                         totalBatches, batchLoss, 
                         (float) correct / totalSamples, TrainingSnapshot.TrainingPhase.OPTIMIZATION);
                 }
-                */
                 
                 // Progress indicator
                 if (batchesProcessed % 5 == 0) {
@@ -531,11 +528,9 @@ public class OCRTrainer {
         }
         
         // Close visualization
-        /*
         if (visualizationEnabled) {
             NeuralNetworkVisualizer.close();
         }
-        */
         
         System.out.printf("Total training time: %.2f seconds\n", totalTrainingTime / 1000.0);
         System.out.printf("Best loss achieved: %.6f\n", bestLoss);
@@ -602,15 +597,15 @@ public class OCRTrainer {
     /**
      * Get layer type for monitoring.
      */
-    private com.apexocr.training.monitoring.LayerSnapshot.LayerType getLayerType(Layer layer) {
+    private com.apexocr.core.monitoring.LayerSnapshot.LayerType getLayerType(Layer layer) {
         if (layer instanceof Conv2D) {
-            return com.apexocr.training.monitoring.LayerSnapshot.LayerType.CONV2D;
+            return com.apexocr.core.monitoring.LayerSnapshot.LayerType.CONV2D;
         } else if (layer instanceof BiLSTM) {
-            return com.apexocr.training.monitoring.LayerSnapshot.LayerType.BILSTM;
+            return com.apexocr.core.monitoring.LayerSnapshot.LayerType.BILSTM;
         } else if (layer instanceof Dense) {
-            return com.apexocr.training.monitoring.LayerSnapshot.LayerType.DENSE;
+            return com.apexocr.core.monitoring.LayerSnapshot.LayerType.DENSE;
         }
-        return com.apexocr.training.monitoring.LayerSnapshot.LayerType.ACTIVATION;
+        return com.apexocr.core.monitoring.LayerSnapshot.LayerType.ACTIVATION;
     }
     
     /**
@@ -638,7 +633,6 @@ public class OCRTrainer {
         float totalLoss = 0;
         
         // Update visualization phase
-        /*
         if (visualizationService != null) {
             visualizationService.getLatestSnapshot().ifPresent(snapshot -> {
                 TrainingSnapshot.Builder builder = TrainingSnapshot.builder()
@@ -653,7 +647,6 @@ public class OCRTrainer {
                 visualizationService.pushSnapshot(builder.build());
             });
         }
-        */
         
         // Process each sample in batch
         for (TrainingSample sample : batch) {
@@ -715,7 +708,6 @@ public class OCRTrainer {
      */
     private void backward(List<TrainingSample> batch, int epoch, int batchIdx) {
         // Update visualization phase
-        /*
         if (visualizationService != null) {
             visualizationService.getLatestSnapshot().ifPresent(snapshot -> {
                 TrainingSnapshot.Builder builder = TrainingSnapshot.builder()
@@ -730,7 +722,6 @@ public class OCRTrainer {
                 visualizationService.pushSnapshot(builder.build());
             });
         }
-        */
         
         // For each sample in batch, accumulate gradients
         for (TrainingSample sample : batch) {

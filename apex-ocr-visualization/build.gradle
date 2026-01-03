@@ -18,14 +18,13 @@ repositories {
 }
 
 dependencies {
-    // LibGDX Core
+    // LibGDX Core - using correct artifact names
     implementation 'com.badlogicgames.gdx:gdx:1.12.1'
     implementation 'com.badlogicgames.gdx:gdx-backend-lwjgl3:1.12.1'
-    implementation 'com.badlogicgames.gdx:gdx-backend-lwjglgl3:1.12.1'
     implementation 'com.badlogicgames.gdx:gdx-platform:1.12.1:natives-desktop'
     
-    // LibGDX 3D support
-    implementation 'com.badlogicgames.gdx:gdx-tools:1.12.1'
+    // LibGDX AI for pathfinding (used by some visualization features)
+    implementation 'com.badlogicgames.gdx:gdx-ai:1.8.0'
     
     // VisUI for 2D UI elements
     implementation 'com.kotcrab.vis:vis-ui:1.5.2'

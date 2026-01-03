@@ -17,12 +17,21 @@ java {
 
 repositories {
     mavenCentral()
+    maven { url = "https://s3.amazonaws.com/libgdx-releases" }
 }
 
 dependencies {
     // Core OCR components
     implementation project(':apex-ocr-core')
     implementation project(':apex-ocr-engine')
+    
+    // Visualization module (for neural network visualization)
+    implementation project(':apex-ocr-visualization')
+    
+    // LibGDX dependencies for visualization support
+    implementation 'com.badlogicgames.gdx:gdx:1.12.1'
+    implementation 'com.badlogicgames.gdx:gdx-backend-lwjgl3:1.12.1'
+    implementation 'com.badlogicgames.gdx:gdx-platform:1.12.1:natives-desktop'
     
     // Testing
     testImplementation 'org.junit.jupiter:junit-jupiter:5.8.2'
@@ -55,4 +64,7 @@ jar {
     }
 
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    
+    // Ensure visualization jar is built before this jar
+    dependsOn ':apex-ocr-visualization:jar'
 }

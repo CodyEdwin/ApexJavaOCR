@@ -1,4 +1,4 @@
-package com.apexocr.training.monitoring;
+package com.apexocr.core.monitoring;
 
 /**
  * Snapshot of layer-specific data for visualization.
