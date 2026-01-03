@@ -271,6 +271,76 @@ public class OcrEngine implements AutoCloseable {
     }
 
     /**
+     * Initializes all network weights using appropriate initialization methods.
+     * This must be called after buildNetwork() if not loading pre-trained weights.
+     * 
+     * Uses He initialization for layers with ReLU activation (Conv2D, Dense with ReLU)
+     * Uses Xavier/Glorot initialization for layers with linear/softmax activation
+     * Uses orthogonal initialization for recurrent layers (BiLSTM)
+     */
+    public void initializeNetworkWeights() {
+        if (network.isEmpty()) {
+            buildNetwork();
+        }
+        
+        System.out.println("Initializing network weights...");
+        long totalParams = 0;
+        
+        for (Layer layer : network) {
+            if (layer instanceof Conv2D) {
+                Conv2D conv = (Conv2D) layer;
+                // Set a default input shape for initialization
+                conv.setInputShape(new long[]{1, 32, 64, 1});
+                conv.initialize(Initializer.HE_NORMAL);
+                long params = conv.getParameterCount();
+                totalParams += params;
+                System.out.println("  Initialized Conv2D: " + conv.getName() + " (" + params + " params)");
+                
+            } else if (layer instanceof BiLSTM) {
+                BiLSTM lstm = (BiLSTM) layer;
+                // Set a default input shape for initialization
+                lstm.setInputShape(new long[]{1, 10, 256});
+                lstm.initialize(Initializer.ORTHOGONAL);
+                long params = lstm.getParameterCount();
+                totalParams += params;
+                System.out.println("  Initialized BiLSTM: " + lstm.getName() + " (" + params + " params)");
+                
+            } else if (layer instanceof Dense) {
+                Dense dense = (Dense) layer;
+                // Use Xavier for layers with softmax, He for ReLU
+                Initializer init = (dense.activation == Dense.ActivationType.SOFTMAX || 
+                                    dense.activation == Dense.ActivationType.LINEAR) 
+                                   ? Initializer.XAVIER_NORMAL 
+                                   : Initializer.HE_NORMAL;
+                dense.initialize(init);
+                long params = dense.getParameterCount();
+                totalParams += params;
+                System.out.println("  Initialized Dense: " + dense.getName() + " (" + params + " params)");
+            }
+        }
+        
+        System.out.println("Total trainable parameters: " + String.format("%,d", totalParams));
+    }
+
+    /**
+     * Checks if the network has been initialized with weights.
+     * 
+     * @return true if weights have been initialized
+     */
+    public boolean hasWeights() {
+        if (network.isEmpty()) {
+            return false;
+        }
+        
+        for (Layer layer : network) {
+            if (layer.getWeights() != null) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * Processes an image and returns the recognized text.
      *
      * @param image The input image

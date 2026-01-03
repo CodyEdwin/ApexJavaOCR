@@ -1312,6 +1312,19 @@ public class OCRTrainer {
             try (OcrEngine engine = new OcrEngine()) {
                 engine.initialize();
                 
+                // Initialize network weights for training (if not loading pre-trained weights)
+                System.out.println("Initializing network weights for training...");
+                engine.initializeNetworkWeights();
+                
+                // Verify weights were initialized
+                if (!engine.hasWeights()) {
+                    System.err.println("ERROR: Network weights not initialized! Training cannot proceed.");
+                    System.err.println("This indicates a problem with weight initialization.");
+                    return;
+                }
+                
+                System.out.println("Network ready for training with " + String.format("%,d", engine.getParameterCount()) + " parameters");
+                
                 // Define vocabulary (same as what will be recognized)
                 String vocabulary = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ";
                 
