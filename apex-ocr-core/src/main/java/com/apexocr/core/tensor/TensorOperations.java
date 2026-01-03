@@ -967,4 +967,296 @@ public final class TensorOperations {
 
         return min;
     }
+
+    // ==================== GRADIENT OPERATIONS ====================
+
+    /**
+     * Computes the derivative of ReLU activation.
+     * d/dx relu(x) = 1 if x > 0, 0 otherwise
+     *
+     * @param a The input tensor (forward pass output)
+     * @return Gradient tensor
+     */
+    public static Tensor reluBackward(Tensor a) {
+        Tensor result = new Tensor(a.getShape(), Tensor.DataType.FLOAT32);
+        long size = a.getSize();
+
+        for (long i = 0; i < size; i++) {
+            float value = a.getFloat(i);
+            result.setFloat(i, value > 0 ? 1.0f : 0.0f);
+        }
+
+        return result;
+    }
+
+    /**
+     * Computes the derivative of Leaky ReLU activation.
+     * d/dx leaky_relu(x) = 1 if x > 0, alpha otherwise
+     *
+     * @param a The input tensor (forward pass output)
+     * @param alpha The negative slope
+     * @return Gradient tensor
+     */
+    public static Tensor leakyReluBackward(Tensor a, float alpha) {
+        Tensor result = new Tensor(a.getShape(), Tensor.DataType.FLOAT32);
+        long size = a.getSize();
+
+        for (long i = 0; i < size; i++) {
+            float value = a.getFloat(i);
+            result.setFloat(i, value >= 0 ? 1.0f : alpha);
+        }
+
+        return result;
+    }
+
+    /**
+     * Computes the derivative of sigmoid activation.
+     * d/dx sigmoid(x) = sigmoid(x) * (1 - sigmoid(x))
+     *
+     * @param a The input tensor (forward pass output, already sigmoid-activated)
+     * @return Gradient tensor
+     */
+    public static Tensor sigmoidBackward(Tensor a) {
+        Tensor result = new Tensor(a.getShape(), Tensor.DataType.FLOAT32);
+        long size = a.getSize();
+
+        for (long i = 0; i < size; i++) {
+            float value = a.getFloat(i);
+            result.setFloat(i, value * (1.0f - value));
+        }
+
+        return result;
+    }
+
+    /**
+     * Computes the derivative of tanh activation.
+     * d/dx tanh(x) = 1 - tanh(x)^2
+     *
+     * @param a The input tensor (forward pass output, already tanh-activated)
+     * @return Gradient tensor
+     */
+    public static Tensor tanhBackward(Tensor a) {
+        Tensor result = new Tensor(a.getShape(), Tensor.DataType.FLOAT32);
+        long size = a.getSize();
+
+        for (long i = 0; i < size; i++) {
+            float value = a.getFloat(i);
+            result.setFloat(i, 1.0f - value * value);
+        }
+
+        return result;
+    }
+
+    /**
+     * Computes gradient for matrix multiplication with respect to left operand.
+     * If C = A @ B, then dA = dC @ B^T
+     *
+     * @param gradOutput The gradient of the loss with respect to output
+     * @param b The right operand of the matmul
+     * @return Gradient with respect to left operand
+     */
+    public static Tensor matmulGradLeft(Tensor gradOutput, Tensor b) {
+        long[] gradShape = gradOutput.getShape();
+        long[] bShape = b.getShape();
+
+        // gradOutput: [m, n], b: [n, k] -> result: [m, k]
+        // Actually we want: dA = gradOutput @ b^T
+        // gradOutput: [batch, out], b: [in, out] -> result: [batch, in]
+
+        int batchSize = (int) gradShape[0];
+        int outDim = (int) gradShape[1];
+        int inDim = (int) bShape[0];
+
+        Tensor result = new Tensor(new long[]{batchSize, inDim}, Tensor.DataType.FLOAT32);
+
+        for (int bIdx = 0; bIdx < batchSize; bIdx++) {
+            for (int in = 0; in < inDim; in++) {
+                float sum = 0;
+                for (int out = 0; out < outDim; out++) {
+                    float dC = gradOutput.getFloat(bIdx, out);
+                    float bVal = b.getFloat(in, out);
+                    sum += dC * bVal;
+                }
+                result.setFloat(sum, bIdx, in);
+            }
+        }
+
+        return result;
+    }
+
+    /**
+     * Computes gradient for matrix multiplication with respect to right operand.
+     * If C = A @ B, then dB = A^T @ dC
+     *
+     * @param a The left operand of the matmul
+     * @param gradOutput The gradient of the loss with respect to output
+     * @return Gradient with respect to right operand
+     */
+    public static Tensor matmulGradRight(Tensor a, Tensor gradOutput) {
+        long[] aShape = a.getShape();
+        long[] gradShape = gradOutput.getShape();
+
+        // a: [m, k], gradOutput: [m, n] -> result: [k, n]
+
+        int m = (int) aShape[0];
+        int k = (int) aShape[1];
+        int n = (int) gradShape[1];
+
+        Tensor result = new Tensor(new long[]{k, n}, Tensor.DataType.FLOAT32);
+
+        for (int kIdx = 0; kIdx < k; kIdx++) {
+            for (int nIdx = 0; nIdx < n; nIdx++) {
+                float sum = 0;
+                for (int mIdx = 0; mIdx < m; mIdx++) {
+                    float aVal = a.getFloat(mIdx, kIdx);
+                    float dC = gradOutput.getFloat(mIdx, nIdx);
+                    sum += aVal * dC;
+                }
+                result.setFloat(sum, kIdx, nIdx);
+            }
+        }
+
+        return result;
+    }
+
+    /**
+     * Computes element-wise gradient for multiplication.
+     * If y = a * b, then da = dY * b, db = dY * a
+     *
+     * @param a First operand
+     * @param gradOutput Gradient of loss with respect to output
+     * @return Gradient with respect to first operand
+     */
+    public static Tensor multiplyGradA(Tensor a, Tensor gradOutput) {
+        Tensor result = new Tensor(a.getShape(), Tensor.DataType.FLOAT32);
+        long size = a.getSize();
+
+        for (long i = 0; i < size; i++) {
+            float aVal = a.getFloat(i);
+            float dY = gradOutput.getFloat(i);
+            result.setFloat(i, dY * aVal);
+        }
+
+        return result;
+    }
+
+    /**
+     * Computes element-wise gradient for multiplication.
+     * If y = a * b, then da = dY * b, db = dY * a
+     *
+     * @param b Second operand
+     * @param gradOutput Gradient of loss with respect to output
+     * @return Gradient with respect to second operand
+     */
+    public static Tensor multiplyGradB(Tensor b, Tensor gradOutput) {
+        Tensor result = new Tensor(b.getShape(), Tensor.DataType.FLOAT32);
+        long size = b.getSize();
+
+        for (long i = 0; i < size; i++) {
+            float bVal = b.getFloat(i);
+            float dY = gradOutput.getFloat(i);
+            result.setFloat(i, dY * bVal);
+        }
+
+        return result;
+    }
+
+    /**
+     * Computes gradient for sum operation.
+     * If y = sum(x), then dx = dY * ones
+     *
+     * @param shape The shape of the input tensor
+     * @param gradOutput Scalar gradient
+     * @return Gradient tensor with all elements set to gradOutput value
+     */
+    public static Tensor sumGrad(long[] shape, float gradOutput) {
+        Tensor result = new Tensor(shape, Tensor.DataType.FLOAT32);
+        long size = result.getSize();
+
+        for (long i = 0; i < size; i++) {
+            result.setFloat(i, gradOutput);
+        }
+
+        return result;
+    }
+
+    /**
+     * Computes gradient for scalar multiplication.
+     * If y = scalar * x, then dx = scalar * dY
+     *
+     * @param scalar The scalar value
+     * @param gradOutput Gradient of loss with respect to output
+     * @return Gradient with respect to input tensor
+     */
+    public static Tensor scalarMultiplyGrad(float scalar, Tensor gradOutput) {
+        Tensor result = new Tensor(gradOutput.getShape(), Tensor.DataType.FLOAT32);
+        long size = gradOutput.getSize();
+
+        for (long i = 0; i < size; i++) {
+            result.setFloat(i, scalar * gradOutput.getFloat(i));
+        }
+
+        return result;
+    }
+
+    /**
+     * In-place scalar multiplication of a tensor.
+     *
+     * @param a The tensor to modify
+     * @param scalar The scalar value
+     */
+    public static void scalarMultiplyInPlace(Tensor a, float scalar) {
+        long size = a.getSize();
+        for (long i = 0; i < size; i++) {
+            a.setFloat(i, a.getFloat(i) * scalar);
+        }
+    }
+
+    /**
+     * Computes gradient for broadcasted addition.
+     * This is a simplified version for broadcasting along batch dimension.
+     *
+     * @param inputShape Shape of input that was broadcasted
+     * @param gradOutput Gradient of loss with respect to broadcasted output
+     * @return Gradient with respect to original input (summed over broadcasted dims)
+     */
+    public static Tensor broadcastAddGrad(long[] inputShape, Tensor gradOutput) {
+        // For addition with broadcasting, gradient is summed back
+        return sum(gradOutput, 0).reshape(inputShape);
+    }
+
+    /**
+     * Computes L2 norm of a tensor.
+     *
+     * @param a The input tensor
+     * @return L2 norm
+     */
+    public static float l2Norm(Tensor a) {
+        float sum = 0;
+        long size = a.getSize();
+        for (long i = 0; i < size; i++) {
+            float val = a.getFloat(i);
+            sum += val * val;
+        }
+        return (float) Math.sqrt(sum);
+    }
+
+    /**
+     * Scales tensor by a factor and accumulates gradient.
+     * Used in optimizers: param -= learningRate * grad
+     *
+     * @param param The parameter tensor to update
+     * @param grad The gradient tensor
+     * @param learningRate The learning rate
+     */
+    public static void addScaledGrad(Tensor param, Tensor grad, float learningRate) {
+        long size = param.getSize();
+        for (long i = 0; i < size; i++) {
+            float current = param.getFloat(i);
+            float gradient = grad != null ? grad.getFloat(i) : 0;
+            param.setFloat(i, current - learningRate * gradient);
+        }
+    }
+
+    // ==================== END GRADIENT OPERATIONS ====================
 }

@@ -27,6 +27,10 @@ public class Tensor implements AutoCloseable {
     private final MemoryRegion memoryRegion;
     private final boolean isView;
 
+    // Gradient storage for backpropagation
+    private Tensor grad;
+    private boolean requiresGrad;
+
     /**
      * Enumeration of supported data types for tensor operations.
      * Each type has specific use cases in neural network inference.
@@ -116,6 +120,7 @@ public class Tensor implements AutoCloseable {
         long byteSize = size * dataType.getByteSize();
         this.memoryRegion = MemoryManager.allocate(byteSize);
         this.isView = false;
+        this.requiresGrad = false;
     }
 
     /**
@@ -134,6 +139,7 @@ public class Tensor implements AutoCloseable {
         this.dataType = DataType.FLOAT32;
         this.memoryRegion = memoryRegion;
         this.isView = true;
+        this.requiresGrad = false;
     }
 
     /**
@@ -148,6 +154,7 @@ public class Tensor implements AutoCloseable {
         this.dataType = dataType;
         this.memoryRegion = memoryRegion;
         this.isView = isView;
+        this.requiresGrad = false;
     }
 
     /**
@@ -539,7 +546,7 @@ public class Tensor implements AutoCloseable {
                 newStrides[i] = stride;
             } else {
                 newShape[i] = shape[j];
-                newStrides[i] = strides[j] * stride;
+                newStrides[j] = strides[j] * stride;
                 j++;
             }
             stride *= newShape[i];
@@ -547,6 +554,142 @@ public class Tensor implements AutoCloseable {
 
         return new Tensor(newShape, newStrides, size, dataType, memoryRegion, true);
     }
+
+    // ==================== GRADIENT SUPPORT ====================
+
+    /**
+     * Enables gradient tracking for this tensor.
+     *
+     * @return This tensor for chaining
+     */
+    public Tensor requireGrad() {
+        this.requiresGrad = true;
+        if (this.grad == null) {
+            this.grad = new Tensor(shape, dataType);
+        }
+        return this;
+    }
+
+    /**
+     * Checks if this tensor requires gradient computation.
+     *
+     * @return True if gradients are required
+     */
+    public boolean isRequiresGrad() {
+        return requiresGrad;
+    }
+
+    /**
+     * Gets the gradient tensor for this tensor.
+     * Creates the gradient tensor if it doesn't exist.
+     *
+     * @return The gradient tensor
+     */
+    public Tensor getGrad() {
+        if (grad == null && requiresGrad) {
+            grad = new Tensor(shape, dataType);
+        }
+        return grad;
+    }
+
+    /**
+     * Sets the gradient tensor directly.
+     *
+     * @param grad The gradient tensor
+     */
+    public void setGrad(Tensor grad) {
+        this.grad = grad;
+    }
+
+    /**
+     * Zeros out the gradient tensor.
+     */
+    public void zeroGrad() {
+        if (grad != null) {
+            grad.fill(0);
+        }
+    }
+
+    /**
+     * Adds a value to the gradient at the specified index (thread-safe accumulation).
+     *
+     * @param index The linear index
+     * @param value The value to add
+     */
+    public void addGrad(long index, float value) {
+        if (grad == null) {
+            if (requiresGrad) {
+                grad = new Tensor(shape, dataType);
+            } else {
+                return;
+            }
+        }
+        float current = grad.getFloat(index) + value;
+        grad.setFloat(index, current);
+    }
+
+    /**
+     * Adds values to the gradient from another tensor (element-wise).
+     *
+     * @param other The tensor containing values to add
+     */
+    public void addGrad(Tensor other) {
+        if (grad == null) {
+            if (requiresGrad) {
+                grad = new Tensor(shape, dataType);
+            } else {
+                return;
+            }
+        }
+        TensorOperations.addInPlace(grad, other);
+    }
+
+    /**
+     * Accumulates gradient by scaling with a factor.
+     *
+     * @param scale The scale factor
+     */
+    public void scaleGrad(float scale) {
+        if (grad != null) {
+            long size = grad.getSize();
+            for (long i = 0; i < size; i++) {
+                grad.setFloat(i, grad.getFloat(i) * scale);
+            }
+        }
+    }
+
+    /**
+     * Computes the L2 norm of the gradient.
+     *
+     * @return The L2 norm
+     */
+    public float gradNorm() {
+        if (grad == null) return 0;
+        float norm = 0;
+        for (long i = 0; i < grad.getSize(); i++) {
+            float val = grad.getFloat(i);
+            norm += val * val;
+        }
+        return (float) Math.sqrt(norm);
+    }
+
+    /**
+     * Clips the gradient to a maximum norm.
+     *
+     * @param maxNorm The maximum norm
+     * @return The actual norm before clipping
+     */
+    public float clipGrad(float maxNorm) {
+        if (grad == null) return 0;
+        float norm = gradNorm();
+        if (norm > maxNorm && norm > 0) {
+            float scale = maxNorm / norm;
+            scaleGrad(scale);
+        }
+        return norm;
+    }
+
+    // ==================== END GRADIENT SUPPORT ====================
 
     /**
      * Gets a summary string representation of the tensor.
@@ -562,6 +705,10 @@ public class Tensor implements AutoCloseable {
     public void close() {
         if (!isView) {
             memoryRegion.close();
+        }
+        if (grad != null) {
+            grad.close();
+            grad = null;
         }
     }
 
