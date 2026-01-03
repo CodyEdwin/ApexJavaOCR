@@ -230,9 +230,11 @@ public class NetworkRenderer {
     }
     
     public void resize(int width, int height) {
-        cameraController.camera.viewportWidth = width;
-        cameraController.camera.viewportHeight = height;
-        cameraController.camera.update();
+        if (cameraController != null && cameraController.camera != null) {
+            cameraController.camera.viewportWidth = width;
+            cameraController.camera.viewportHeight = height;
+            cameraController.camera.update();
+        }
     }
     
     public void dispose() {
