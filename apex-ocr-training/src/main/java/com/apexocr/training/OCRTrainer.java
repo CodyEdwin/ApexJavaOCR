@@ -147,58 +147,69 @@ public class OCRTrainer {
     private NetworkArchitecture createNetworkArchitecture() {
         NetworkArchitecture.Builder builder = NetworkArchitecture.builder();
         builder.setName("ApexOCR CRNN");
-        
+
         int layerIndex = 0;
+        int totalParams = 0;
         for (Layer layer : engine.getNetwork()) {
             String layerName = layer.getName();
             com.apexocr.core.monitoring.LayerSnapshot.LayerType type;
             int inputChannels = 0, outputChannels = 0, height = 0, width = 0;
-            int parameters = 0;
-            
+            int layerParams = 0;
+
             if (layer instanceof Conv2D) {
                 type = com.apexocr.core.monitoring.LayerSnapshot.LayerType.CONV2D;
                 Conv2D conv = (Conv2D) layer;
-                long[] wShape = conv.getWeights().getShape();
-                inputChannels = (int) wShape[0];
-                outputChannels = (int) wShape[3];
-                height = 32; // Default input height
-                width = 64; // Placeholder
-                parameters = (int) conv.getWeights().getSize();
+                Tensor weights = conv.getWeights();
+                if (weights != null && weights.getShape() != null) {
+                    long[] wShape = weights.getShape();
+                    inputChannels = (int) wShape[0];
+                    outputChannels = (int) wShape[3];
+                    height = 32; // Default input height
+                    width = 64; // Placeholder
+                    layerParams = (int) weights.getSize();
+                }
             } else if (layer instanceof BiLSTM) {
                 type = com.apexocr.core.monitoring.LayerSnapshot.LayerType.BILSTM;
                 BiLSTM lstm = (BiLSTM) layer;
-                long[] wShape = lstm.getWeights().getShape();
-                outputChannels = (int) wShape[wShape.length - 1];
-                parameters = (int) lstm.getWeights().getSize();
+                Tensor weights = lstm.getWeights();
+                if (weights != null && weights.getShape() != null) {
+                    long[] wShape = weights.getShape();
+                    outputChannels = (int) wShape[wShape.length - 1];
+                    layerParams = (int) weights.getSize();
+                }
             } else if (layer instanceof Dense) {
                 type = com.apexocr.core.monitoring.LayerSnapshot.LayerType.DENSE;
                 Dense dense = (Dense) layer;
-                long[] wShape = dense.getWeights().getShape();
-                outputChannels = (int) wShape[wShape.length - 1];
-                parameters = (int) dense.getWeights().getSize();
+                Tensor weights = dense.getWeights();
+                if (weights != null && weights.getShape() != null) {
+                    long[] wShape = weights.getShape();
+                    outputChannels = (int) wShape[wShape.length - 1];
+                    layerParams = (int) weights.getSize();
+                }
             } else {
                 type = com.apexocr.core.monitoring.LayerSnapshot.LayerType.ACTIVATION;
             }
-            
+
             float xPos = (layerIndex - engine.getNetwork().size() / 2f) * 3f;
-            
+
             builder.addLayer(
                 new NetworkArchitecture.LayerInfo.Builder()
                     .setName(layerName)
                     .setType(type)
                     .setDimensions(inputChannels, outputChannels, height, width)
-                    .setParameters(parameters)
+                    .setParameters(layerParams)
                     .setPosition(xPos, 0, 0)
                     .build()
             );
-            
+
+            totalParams += layerParams;
             layerIndex++;
         }
-        
+
         builder.setInputSize(4096);
         builder.setOutputSize(numClasses);
-        builder.setTotalParameters(parameters.size());
-        
+        builder.setTotalParameters(totalParams);
+
         return builder.build();
     }
     
