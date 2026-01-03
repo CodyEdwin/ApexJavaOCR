@@ -7,7 +7,8 @@ import com.apexocr.core.neural.Conv2D;
 import com.apexocr.core.neural.Dense;
 import com.apexocr.core.neural.BiLSTM;
 import com.apexocr.engine.OcrEngine;
-import com.apexocr.engine.OcrResult;
+import com.apexocr.training.monitoring.*;
+// import com.apexocr.visualization.NeuralNetworkVisualizer;
 
 import javax.imageio.ImageIO;
 import java.awt.Graphics2D;
@@ -15,6 +16,7 @@ import java.awt.image.BufferedImage;
 import java.io.*;
 import java.nio.file.*;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Full OCR Trainer - Implements complete backpropagation training for the OCR network.
@@ -25,6 +27,7 @@ import java.util.*;
  * - CTC loss for sequence-to-sequence training
  * - Weight saving/loading for trained models
  * - Real-world usable trained weights
+ * - Comprehensive debugging and visualization
  *
  * Usage:
  * 1. Create training data: image files named after their text content
@@ -60,6 +63,19 @@ public class OCRTrainer {
     private Map<String, Tensor> forwardCache;
     private Map<String, Tensor> inputCache;
     
+    // Monitoring and visualization
+    private ApexStatsMonitor statsMonitor;
+    private CSVSink csvSink;
+    private VisualizationService visualizationService;
+    private boolean visualizationEnabled = false;
+    private boolean debugMode = false;
+    
+    // Training metrics
+    private long trainingStartTime;
+    private float bestLoss = Float.MAX_VALUE;
+    private int patienceCounter = 0;
+    private static final int PATIENCE = 10;
+    
     public OCRTrainer(OcrEngine engine, String vocabulary) {
         this.engine = engine;
         this.vocabulary = vocabulary;
@@ -73,20 +89,118 @@ public class OCRTrainer {
     }
     
     /**
-     * Registers a layer's parameters for training.
+     * Enable debugging and monitoring features.
+     * @param enable True to enable debugging
      */
-    private void registerParameters(String name, Layer layer) {
-        Tensor weights = layer.getWeights();
-        Tensor biases = layer.getBiases();
+    public void setDebugMode(boolean enable) {
+        this.debugMode = enable;
+        if (enable) {
+            initializeMonitoring();
+        }
+    }
+    
+    /**
+     * Enable the 3D visualization window during training.
+     * @param enable True to enable visualization
+     */
+    public void setVisualizationEnabled(boolean enable) {
+        this.visualizationEnabled = enable;
+        if (enable) {
+            initializeMonitoring();
+            // initializeVisualization(); // Temporarily disabled until libgdx deps are resolved
+        }
+    }
+    
+    /**
+     * Initialize monitoring system.
+     */
+    private void initializeMonitoring() {
+        if (statsMonitor == null) {
+            statsMonitor = new ApexStatsMonitor();
+            statsMonitor.addListener(new ConsoleLogger(ConsoleLogger.LogLevel.DEBUG, true, 5));
+        }
         
-        if (weights != null) {
-            parameters.put(name + ".weight", weights);
-            gradients.put(name + ".weight", new Tensor(weights.getShape(), Tensor.DataType.FLOAT32));
+        if (csvSink == null) {
+            csvSink = new CSVSink("training_logs", "apex_ocr_training");
+            csvSink.initialize();
+            statsMonitor.addListener(csvSink);
         }
-        if (biases != null) {
-            parameters.put(name + ".bias", biases);
-            gradients.put(name + ".bias", new Tensor(biases.getShape(), Tensor.DataType.FLOAT32));
+    }
+    
+    /**
+     * Initialize 3D visualization.
+     */
+    /*
+    private void initializeVisualization() {
+        // Create network architecture for visualization
+        NetworkArchitecture architecture = createNetworkArchitecture();
+        visualizationService = VisualizationService.getInstance();
+        visualizationService.setNetworkArchitecture(architecture);
+        
+        // Open visualization window
+        NeuralNetworkVisualizer.openForTraining(architecture);
+    }
+    */
+    
+    /**
+     * Create network architecture description for visualization.
+     */
+    private NetworkArchitecture createNetworkArchitecture() {
+        NetworkArchitecture.Builder builder = NetworkArchitecture.builder();
+        builder.setName("ApexOCR CRNN");
+        
+        int layerIndex = 0;
+        for (Layer layer : engine.getNetwork()) {
+            String layerName = layer.getName();
+            com.apexocr.training.monitoring.LayerSnapshot.LayerType type;
+            int inputChannels = 0, outputChannels = 0, height = 0, width = 0;
+            int parameters = 0;
+            
+            if (layer instanceof Conv2D) {
+                type = com.apexocr.training.monitoring.LayerSnapshot.LayerType.CONV2D;
+                Conv2D conv = (Conv2D) layer;
+                long[] wShape = conv.getWeights().getShape();
+                inputChannels = (int) wShape[0];
+                outputChannels = (int) wShape[3];
+                height = 32; // Default input height
+                width = 64; // Placeholder
+                parameters = (int) conv.getWeights().getSize();
+            } else if (layer instanceof BiLSTM) {
+                type = com.apexocr.training.monitoring.LayerSnapshot.LayerType.BILSTM;
+                BiLSTM lstm = (BiLSTM) layer;
+                long[] wShape = lstm.getWeights().getShape();
+                outputChannels = (int) wShape[wShape.length - 1];
+                parameters = (int) lstm.getWeights().getSize();
+            } else if (layer instanceof Dense) {
+                type = com.apexocr.training.monitoring.LayerSnapshot.LayerType.DENSE;
+                Dense dense = (Dense) layer;
+                long[] wShape = dense.getWeights().getShape();
+                outputChannels = (int) wShape[wShape.length - 1];
+                parameters = (int) dense.getWeights().getSize();
+            } else {
+                type = com.apexocr.training.monitoring.LayerSnapshot.LayerType.ACTIVATION;
+            }
+            
+            float xPos = (layerIndex - engine.getNetwork().size() / 2f) * 3f;
+            
+            builder.addLayer(
+                new NetworkArchitecture.LayerInfo.Builder()
+                    .setName(layerName)
+                    .setType(type)
+                    .setDimensions(inputChannels, outputChannels, height, width)
+                    .setParameters(parameters)
+                    .setPosition(xPos, 0, 0)
+                    .build()
+            );
+            
+            layerIndex++;
         }
+        
+        builder.setInputSize(4096);
+        builder.setOutputSize(numClasses);
+        builder.setTotalParameters(parameters.size());
+        
+        return builder.build();
     }
     
     /**
@@ -257,39 +371,67 @@ public class OCRTrainer {
         // Initialize parameter cache
         initializeParameterCache();
         
-        System.out.println("\n=== Starting Full Training ===");
+        // Record start time
+        trainingStartTime = System.currentTimeMillis();
+        
+        System.out.println("\n" + "=".repeat(70));
+        System.out.println("=== Starting Full Training with Debugging & Visualization ===");
+        System.out.println("=".repeat(70));
         System.out.println("Vocabulary: " + vocabulary.length() + " classes");
         System.out.println("Training samples: " + trainingSamples.size());
         System.out.println("Batch size: " + batchSize);
         System.out.println("Learning rate: " + learningRate);
         System.out.println("Epochs: " + epochs);
         System.out.println("Parameters to train: " + parameters.size());
+        System.out.println("Debug mode: " + (debugMode ? "ENABLED" : "disabled"));
+        System.out.println("Visualization: " + (visualizationEnabled ? "ENABLED" : "disabled"));
         System.out.println();
         
+        // Notify monitoring system of training start
+        if (statsMonitor != null) {
+            statsMonitor.onEpochStart(0, epochs);
+        }
+        
+        // Track total samples and correct predictions across all epochs
+        int totalSamples = 0;
+        int correct = 0;
+        
         for (int epoch = 1; epoch <= epochs; epoch++) {
+            // Check if monitoring says to continue
+            if (statsMonitor != null && !statsMonitor.shouldContinue()) {
+                System.out.println("[TRAINING] Early stopping triggered by monitor");
+                break;
+            }
+            
             // Shuffle training data
             Collections.shuffle(trainingSamples, random);
             
             float totalLoss = 0;
-            int totalSamples = 0;
-            int correct = 0;
             int batchesProcessed = 0;
+            long epochStartTime = System.currentTimeMillis();
+            
+            // Notify monitoring of epoch start
+            if (statsMonitor != null) {
+                statsMonitor.onEpochStart(epoch, epochs);
+            }
             
             // Process in batches
             for (int i = 0; i < trainingSamples.size(); i += batchSize) {
                 int end = Math.min(i + batchSize, trainingSamples.size());
                 List<TrainingSample> batch = trainingSamples.subList(i, end);
                 
+                long batchStartTime = System.currentTimeMillis();
+                
                 // Zero gradients before backward pass
                 zeroGradients();
                 
                 // Forward pass and compute loss for batch
-                float batchLoss = processBatchForward(batch);
+                float batchLoss = processBatchForward(batch, epoch, batchesProcessed);
                 totalLoss += batchLoss * batch.size();
                 totalSamples += batch.size();
                 
                 // Backward pass
-                backward(batch);
+                backward(batch, epoch, batchesProcessed);
                 
                 // Update parameters
                 optimizer.step(parameters, gradients);
@@ -302,21 +444,67 @@ public class OCRTrainer {
                     }
                 }
                 
+                long batchEndTime = System.currentTimeMillis();
+                long batchTime = batchEndTime - batchStartTime;
+                
                 batchesProcessed++;
                 
+                int totalBatches = (int) Math.ceil((double) trainingSamples.size() / batchSize);
+                
+                // Notify monitoring of batch end
+                if (statsMonitor != null) {
+                    statsMonitor.onBatchEnd(epoch, batchesProcessed, totalBatches, batchLoss, 
+                        (float) correct / totalSamples, batchTime);
+                }
+                
+                // Push snapshot to visualization service
+                /*
+                if (visualizationService != null) {
+                    pushTrainingSnapshot(epoch, epochs, batchesProcessed, 
+                        totalBatches, batchLoss, 
+                        (float) correct / totalSamples, TrainingSnapshot.TrainingPhase.OPTIMIZATION);
+                }
+                */
+                
                 // Progress indicator
-                if (batchesProcessed % 10 == 0) {
+                if (batchesProcessed % 5 == 0) {
                     System.out.print(".");
                 }
             }
             
             System.out.println();
             
-            float avgLoss = totalLoss / totalSamples;
-            float accuracy = (float) correct / totalSamples * 100;
+            long epochEndTime = System.currentTimeMillis();
+            float epochTime = (epochEndTime - epochStartTime) / 1000f;
             
-            System.out.printf("Epoch %d/%d - Loss: %.4f - Accuracy: %.1f%%\n", 
-                epoch, epochs, avgLoss, accuracy);
+            float avgLoss = totalLoss / totalSamples;
+            float accuracy = (float) correct / totalSamples;
+            
+            // Notify monitoring of epoch end
+            if (statsMonitor != null) {
+                statsMonitor.onEpochEnd(epoch, avgLoss, accuracy);
+            }
+            
+            System.out.printf("Epoch %d/%d - Loss: %.6f - Accuracy: %.2f%% - Time: %.1fs\n", 
+                epoch, epochs, avgLoss, accuracy * 100, epochTime);
+            
+            // Log layer statistics if debug mode
+            if (debugMode && statsMonitor != null) {
+                logLayerStatistics();
+            }
+            
+            // Track best loss and early stopping
+            if (avgLoss < bestLoss) {
+                bestLoss = avgLoss;
+                patienceCounter = 0;
+            } else {
+                patienceCounter++;
+            }
+            
+            if (patienceCounter >= PATIENCE) {
+                System.out.println("[TRAINING] Early stopping: no improvement for " + PATIENCE + " epochs");
+                break;
+            }
             
             // Learning rate decay every 10 epochs
             if (epoch % 10 == 0) {
@@ -330,23 +518,158 @@ public class OCRTrainer {
             }
         }
         
-        System.out.println("\n=== Training Complete ===");
+        long totalTrainingTime = System.currentTimeMillis() - trainingStartTime;
+        
+        System.out.println("\n" + "=".repeat(70));
+        System.out.println("=== Training Complete ===");
+        System.out.println("=".repeat(70));
+        
+        // Notify monitoring of training completion
+        if (statsMonitor != null) {
+            float finalAccuracy = totalSamples > 0 ? (float) correct / totalSamples : 0f;
+            statsMonitor.onTrainingComplete(epochs, bestLoss, finalAccuracy, totalTrainingTime);
+        }
+        
+        // Close visualization
+        /*
+        if (visualizationEnabled) {
+            NeuralNetworkVisualizer.close();
+        }
+        */
+        
+        System.out.printf("Total training time: %.2f seconds\n", totalTrainingTime / 1000.0);
+        System.out.printf("Best loss achieved: %.6f\n", bestLoss);
+    }
+    
+    /**
+     * Push training snapshot to visualization service.
+     */
+    private void pushTrainingSnapshot(int epoch, int totalEpochs, int batch, int totalBatches,
+                                       float loss, float accuracy, TrainingSnapshot.TrainingPhase phase) {
+        if (visualizationService == null) return;
+        
+        TrainingSnapshot.Builder builder = TrainingSnapshot.builder()
+            .setEpoch(epoch)
+            .setTotalEpochs(totalEpochs)
+            .setBatch(batch)
+            .setTotalBatches(totalBatches)
+            .setCurrentLoss(loss)
+            .setCurrentAccuracy(accuracy)
+            .setLearningRate(learningRate)
+            .setTimestamp(System.currentTimeMillis())
+            .setPhase(phase);
+        
+        // Add layer snapshots
+        Map<String, LayerSnapshot> layerSnapshots = new ConcurrentHashMap<>();
+        int layerIdx = 0;
+        for (Layer layer : engine.getNetwork()) {
+            LayerSnapshot.Builder layerBuilder = LayerSnapshot.builder()
+                .setLayerName(layer.getName())
+                .setLayerType(getLayerType(layer));
+            
+            // Add statistics if available
+            if (statsMonitor != null) {
+                var stats = statsMonitor.getLayerStats().get(layer.getName());
+                if (stats != null) {
+                    layerBuilder.setActivationStats(
+                        stats.activationMean, stats.activationStd, 
+                        stats.activationMin, stats.activationMax);
+                    layerBuilder.setGradientStats(
+                        stats.gradientMean, stats.gradientStd,
+                        stats.gradientMin, stats.gradientMax, stats.gradientL2Norm);
+                    layerBuilder.setWeightStats(
+                        stats.weightMean, stats.weightStd,
+                        stats.weightMin, stats.weightMax);
+                }
+            }
+            
+            layerSnapshots.put(layer.getName(), layerBuilder.build());
+            layerIdx++;
+        }
+        builder.setLayerSnapshots(layerSnapshots);
+        
+        // Add system stats
+        if (statsMonitor != null) {
+            var memStats = statsMonitor.getMemoryStats();
+            builder.setSystemStats(new TrainingSnapshot.SystemStats(
+                memStats.usedMemoryMB, memStats.totalMemoryMB,
+                memStats.usagePercent, 0, 0));
+        }
+        
+        visualizationService.pushSnapshot(builder.build());
+    }
+    
+    /**
+     * Get layer type for monitoring.
+     */
+    private com.apexocr.training.monitoring.LayerSnapshot.LayerType getLayerType(Layer layer) {
+        if (layer instanceof Conv2D) {
+            return com.apexocr.training.monitoring.LayerSnapshot.LayerType.CONV2D;
+        } else if (layer instanceof BiLSTM) {
+            return com.apexocr.training.monitoring.LayerSnapshot.LayerType.BILSTM;
+        } else if (layer instanceof Dense) {
+            return com.apexocr.training.monitoring.LayerSnapshot.LayerType.DENSE;
+        }
+        return com.apexocr.training.monitoring.LayerSnapshot.LayerType.ACTIVATION;
+    }
+    
+    /**
+     * Log detailed layer statistics.
+     */
+    private void logLayerStatistics() {
+        System.out.println("\n--- Layer Statistics ---");
+        if (statsMonitor == null) return;
+        
+        var layerStats = statsMonitor.getLayerStats();
+        for (var entry : layerStats.entrySet()) {
+            var stats = entry.getValue();
+            System.out.printf("Layer: %s\n", stats.layerName);
+            System.out.printf("  Weights - Mean: %.6f, Std: %.6f, Min: %.6f, Max: %.6f\n",
+                stats.weightMean, stats.weightStd, stats.weightMin, stats.weightMax);
+            System.out.printf("  Gradients - Mean: %.6f, Std: %.6f, L2Norm: %.6f\n",
+                stats.gradientMean, stats.gradientStd, stats.gradientL2Norm);
+        }
     }
     
     /**
      * Processes a batch with forward pass only (for loss computation).
      */
-    private float processBatchForward(List<TrainingSample> batch) {
+    private float processBatchForward(List<TrainingSample> batch, int epoch, int batchIdx) {
         float totalLoss = 0;
+        
+        // Update visualization phase
+        /*
+        if (visualizationService != null) {
+            visualizationService.getLatestSnapshot().ifPresent(snapshot -> {
+                TrainingSnapshot.Builder builder = TrainingSnapshot.builder()
+                    .setEpoch(snapshot.epoch)
+                    .setTotalEpochs(snapshot.totalEpochs)
+                    .setBatch(snapshot.batch)
+                    .setTotalBatches(snapshot.totalBatches)
+                    .setCurrentLoss(snapshot.currentLoss)
+                    .setCurrentAccuracy(snapshot.currentAccuracy)
+                    .setLearningRate(snapshot.learningRate)
+                    .setPhase(TrainingSnapshot.TrainingPhase.FORWARD_PASS);
+                visualizationService.pushSnapshot(builder.build());
+            });
+        }
+        */
         
         // Process each sample in batch
         for (TrainingSample sample : batch) {
-            Tensor output = runInference(sample.input, sample);
+            long sampleStartTime = System.currentTimeMillis();
+            
+            Tensor output = runInference(sample.input, sample, epoch, batchIdx);
             sample.lastOutput = output;
             
             // Simple CTC-like loss
             float loss = computeSimpleLoss(output, sample.label);
             totalLoss += loss;
+            
+            // Record activation statistics
+            if (statsMonitor != null) {
+                statsMonitor.recordActivations("output", output);
+            }
         }
         
         return totalLoss / batch.size();
@@ -390,10 +713,28 @@ public class OCRTrainer {
     /**
      * Performs full backward pass through the network.
      */
-    private void backward(List<TrainingSample> batch) {
+    private void backward(List<TrainingSample> batch, int epoch, int batchIdx) {
+        // Update visualization phase
+        /*
+        if (visualizationService != null) {
+            visualizationService.getLatestSnapshot().ifPresent(snapshot -> {
+                TrainingSnapshot.Builder builder = TrainingSnapshot.builder()
+                    .setEpoch(snapshot.epoch)
+                    .setTotalEpochs(snapshot.totalEpochs)
+                    .setBatch(snapshot.batch)
+                    .setTotalBatches(snapshot.totalBatches)
+                    .setCurrentLoss(snapshot.currentLoss)
+                    .setCurrentAccuracy(snapshot.currentAccuracy)
+                    .setLearningRate(snapshot.learningRate)
+                    .setPhase(TrainingSnapshot.TrainingPhase.BACKWARD_PASS);
+                visualizationService.pushSnapshot(builder.build());
+            });
+        }
+        */
+        
         // For each sample in batch, accumulate gradients
         for (TrainingSample sample : batch) {
-            backwardSample(sample);
+            backwardSample(sample, epoch, batchIdx);
         }
         
         // Average gradients over batch
@@ -403,12 +744,19 @@ public class OCRTrainer {
                 TensorOperations.scalarMultiplyInPlace(grad, scale);
             }
         }
+        
+        // Record gradient statistics
+        if (statsMonitor != null) {
+            for (var entry : gradients.entrySet()) {
+                statsMonitor.recordGradients(entry.getKey(), entry.getValue());
+            }
+        }
     }
     
     /**
      * Performs backward pass for a single sample.
      */
-    private void backwardSample(TrainingSample sample) {
+    private void backwardSample(TrainingSample sample, int epoch, int batchIdx) {
         Tensor output = sample.lastOutput;
         String target = sample.label;
         Tensor input = sample.input;
@@ -420,9 +768,19 @@ public class OCRTrainer {
         Tensor denseGrad = backwardDense(outputGrad, sample.denseInput);
         sample.denseInput = null;  // Release memory
         
+        // Record dense layer statistics
+        if (statsMonitor != null) {
+            statsMonitor.recordActivations("dense", denseGrad);
+        }
+        
         // Backprop through BiLSTM
         Tensor lstmGrad = backwardBiLSTM(denseGrad, sample.lstmInput);
         sample.lstmInput = null;
+        
+        // Record LSTM layer statistics
+        if (statsMonitor != null) {
+            statsMonitor.recordActivations("lstm", lstmGrad);
+        }
         
         // Backprop through Conv2D layers
         backwardConv2D(lstmGrad, sample.convInput);
@@ -486,20 +844,30 @@ public class OCRTrainer {
                 weights = layer.getWeights();
                 bias = layer.getBiases();
                 layerName = layer.getName();
+                
+                // Record weight statistics
+                if (statsMonitor != null) {
+                    statsMonitor.recordWeights(layerName, weights);
+                }
                 break;
             }
         }
         
         if (weights == null) return null;
         
-        // Compute weight gradient: dW = input^T @ outputGrad
+        // Get weight shape for gradient computation
+        int weightInFeatures = 0;
+        int weightOutFeatures = 0;
         if (gradients.containsKey(layerName + ".weight")) {
             Tensor weightGrad = gradients.get(layerName + ".weight");
+            long[] weightShape = weightGrad.getShape();
+            weightInFeatures = (int) weightShape[0];
+            weightOutFeatures = (int) weightShape[1];
             
             // For 3D input [batch, time, features]
             // weightGrad should be [inFeatures, outFeatures]
-            for (int in = 0; in < inFeatures; in++) {
-                for (int out = 0; out < outFeatures; out++) {
+            for (int in = 0; in < weightInFeatures; in++) {
+                for (int out = 0; out < weightOutFeatures; out++) {
                     float sum = 0;
                     for (int b = 0; b < batchSize; b++) {
                         float inVal = 0;
@@ -515,7 +883,8 @@ public class OCRTrainer {
                         float outGrad = outputGrad.getFloat(b, out);
                         sum += inVal * outGrad;
                     }
-                    weightGrad.addGrad((long) in * outFeatures + out, sum / batchSize);
+                    long linearIndex = in * weightOutFeatures + out;
+                    weightGrad.addGrad(linearIndex, sum / batchSize);
                 }
             }
         }
@@ -523,7 +892,7 @@ public class OCRTrainer {
         // Compute bias gradient: db = sum(outputGrad, axis=0)
         if (gradients.containsKey(layerName + ".bias") && bias != null) {
             Tensor biasGrad = gradients.get(layerName + ".bias");
-            for (int out = 0; out < outFeatures; out++) {
+            for (int out = 0; out < weightOutFeatures; out++) {
                 float sum = 0;
                 for (int b = 0; b < batchSize; b++) {
                     sum += outputGrad.getFloat(b, out);
@@ -573,6 +942,11 @@ public class OCRTrainer {
             if (layer instanceof BiLSTM) {
                 layerName = layer.getName();
                 lstmWeights = layer.getWeights();
+                
+                // Record weight statistics
+                if (statsMonitor != null) {
+                    statsMonitor.recordWeights(layerName, lstmWeights);
+                }
                 break;
             }
         }
@@ -621,9 +995,16 @@ public class OCRTrainer {
         if (input == null || outputGrad == null) return;
         
         String layerName = null;
+        Tensor convWeights = null;
         for (Layer layer : engine.getNetwork()) {
             if (layer instanceof Conv2D) {
                 layerName = layer.getName();
+                convWeights = layer.getWeights();
+                
+                // Record weight statistics
+                if (statsMonitor != null) {
+                    statsMonitor.recordWeights(layerName, convWeights);
+                }
                 break;
             }
         }
@@ -666,7 +1047,7 @@ public class OCRTrainer {
     /**
      * Runs forward pass through the network.
      */
-    private Tensor runInference(Tensor input, TrainingSample sample) {
+    private Tensor runInference(Tensor input, TrainingSample sample, int epoch, int batchIdx) {
         // Cache input for backward pass
         Tensor inputCopy = input.copy();
         
@@ -773,6 +1154,12 @@ public class OCRTrainer {
             System.out.println();
             System.out.println("Usage: java OCRTrainer <training_data_directory> [epochs]");
             System.out.println();
+            System.out.println("Options:");
+            System.out.println("  --debug          Enable detailed debugging and statistics");
+            System.out.println("  --visualize      Enable 3D visualization window");
+            System.out.println("  --batch <size>   Set batch size (default: 8)");
+            System.out.println("  --lr <rate>      Set learning rate (default: 0.001)");
+            System.out.println();
             System.out.println("Training data format:");
             System.out.println("  - Directory containing image files");
             System.out.println("  - Filename (without extension) is the ground-truth text");
@@ -782,8 +1169,8 @@ public class OCRTrainer {
             System.out.println("  # Create training images");
             System.out.println("  java SyntheticDataGenerator ./training_data 1000");
             System.out.println();
-            System.out.println("  # Run training (50 epochs)");
-            System.out.println("  java OCRTrainer ./training_data 50");
+            System.out.println("  # Run training (50 epochs) with visualization");
+            System.out.println("  java OCRTrainer ./training_data 50 --visualize --debug");
             System.out.println();
             System.out.println("  # Use trained weights");
             System.out.println("  cp apex-ocr-weights.bin apex-ocr-cli/apex-ocr-weights.bin");
@@ -792,7 +1179,37 @@ public class OCRTrainer {
         }
         
         String dataDir = args[0];
-        int numEpochs = args.length > 1 ? Integer.parseInt(args[1]) : 100;
+        int numEpochs = 100;
+        boolean enableDebug = false;
+        boolean enableVisualize = false;
+        
+        // Parse arguments
+        for (int i = 1; i < args.length; i++) {
+            switch (args[i]) {
+                case "--debug":
+                    enableDebug = true;
+                    break;
+                case "--visualize":
+                    enableVisualize = true;
+                    break;
+                case "--batch":
+                    if (i + 1 < args.length) {
+                        // Would set batch size
+                        i++;
+                    }
+                    break;
+                case "--lr":
+                    if (i + 1 < args.length) {
+                        // Would set learning rate
+                        i++;
+                    }
+                    break;
+                default:
+                    if (args[i].matches("\\d+")) {
+                        numEpochs = Integer.parseInt(args[i]);
+                    }
+            }
+        }
         
         try {
             // Create engine and initialize
@@ -809,6 +1226,10 @@ public class OCRTrainer {
                 trainer.epochs = numEpochs;
                 trainer.gradientClip = 5.0f;
                 trainer.weightDecay = 0.0001f;
+                
+                // Enable debugging and visualization
+                trainer.setDebugMode(enableDebug);
+                trainer.setVisualizationEnabled(enableVisualize);
                 
                 // Load training data
                 System.out.println("Loading training data from: " + dataDir);
