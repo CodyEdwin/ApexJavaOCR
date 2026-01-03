@@ -1,0 +1,58 @@
+/*
+ * ApexOCR Training Module Build Configuration
+ */
+
+plugins {
+    id 'java-library'
+    id 'application'
+}
+
+group 'com.apexocr'
+version '1.0.0'
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    // Core OCR components
+    implementation project(':apex-ocr-core')
+    implementation project(':apex-ocr-engine')
+    
+    // Testing
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.8.2'
+    testImplementation 'org.mockito:mockito-core:4.6.1'
+}
+
+test {
+    useJUnitPlatform()
+}
+
+// Application configuration
+application {
+    mainClass = 'com.apexocr.training.SyntheticDataGenerator'
+}
+
+// Jar configuration
+jar {
+    manifest {
+        attributes(
+            'Implementation-Title': 'ApexOCR Training Module',
+            'Implementation-Version': version
+        )
+    }
+
+    // Include all dependencies in the jar
+    from {
+        configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) }
+    } {
+        exclude 'META-INF/*.RSA', 'META-INF/*.SF', 'META-INF/*.DSA'
+    }
+
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}

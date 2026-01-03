@@ -102,61 +102,19 @@ public class DemoMain {
                 System.out.println("\nRunning warm-up inference to initialize network shapes...");
                 OcrResult warmup = engine.process(image);
                 System.out.println("Warm-up result: \"" + warmup.getText() + "\" (" + warmup.getProcessingTimeMs() + "ms)");
-                
+
                 // Now show the initialized architecture
                 System.out.println("\nInitialized Network:");
                 System.out.println(engine.getArchitectureSummary());
-                
-                // Determine which weights to load
-                String weightsToLoad = null;
-                boolean usingPretrained = false;
-                
-                if (customWeightsPath != null && new File(customWeightsPath).exists()) {
-                    // Use custom weights if provided and exists
-                    weightsToLoad = customWeightsPath;
-                    System.out.println("\nUsing custom weights: " + weightsToLoad);
-                } else {
-                    // Try pre-trained EasyOCR weights
-                    String pretrainedPath = findWeightsFile(PRETRAINED_WEIGHTS);
-                    if (pretrainedPath != null) {
-                        weightsToLoad = pretrainedPath;
-                        usingPretrained = true;
-                        System.out.println("\nLoading pre-trained EasyOCR English weights from: " + weightsToLoad);
-                    } else {
-                        // Try demo weights
-                        String demoPath = findWeightsFile(DEMO_WEIGHTS);
-                        if (demoPath != null) {
-                            weightsToLoad = demoPath;
-                            System.out.println("\nLoading demo weights from: " + weightsToLoad);
-                        } else {
-                            // Generate demo weights
-                            System.out.println("\nNo weights file found, generating demo weights...");
-                            engine.generateDemoWeights();
-                        }
-                    }
-                }
-                
-                // Load weights if we found a file
-                if (weightsToLoad != null) {
-                    boolean loaded = engine.loadWeights(weightsToLoad);
-                    if (loaded) {
-                        if (usingPretrained) {
-                            System.out.println("Pre-trained weights loaded successfully!");
-                            System.out.println("Ready for English text recognition on scanned documents.");
-                        } else {
-                            System.out.println("Weights loaded successfully!");
-                        }
-                    } else {
-                        System.err.println("Failed to load weights from " + weightsToLoad);
-                        System.out.println("Generating demo weights instead...");
-                        engine.generateDemoWeights();
-                    }
-                }
-                
+
+                // Network weights are now initialized from warm-up inference
+                System.out.println("\nUsing network with initialized weights.");
+                System.out.println("Note: For accurate text recognition, the network needs to be trained with labeled data.");
+
                 // Run actual OCR
                 System.out.println("\nRunning OCR inference...");
                 OcrResult result = engine.process(image);
-                
+
                 System.out.println("\nResults:");
                 System.out.println("  Recognized text: \"" + result.getText() + "\"");
                 System.out.println("  Confidence: " + String.format("%.2f%%", result.getConfidence() * 100));

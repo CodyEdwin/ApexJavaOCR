@@ -250,21 +250,22 @@ public class OcrEngine implements AutoCloseable {
         // PREDICTION
         // =================================================================
         
-        // Dense layer to project from BiLSTM output (512) to intermediate (256)
-        // This matches SequenceModeling.x.linear.weight [256, 512]
-        // IMPORTANT: 512 input units to match BiLSTM output, 256 output units
-        Dense denseSeq0 = new Dense(256, Dense.ActivationType.RELU, false);  // No bias, matches [256, 512] weight
+        // First Dense layer: projects from BiLSTM output (512) to intermediate (256)
+        // This matches SequenceModeling.0.linear.weight [256, 512] = 131072 elements
+        // IMPORTANT: inputUnits=512 to match BiLSTM output (256 forward + 256 backward)
+        Dense denseSeq0 = new Dense(256, 512, Dense.ActivationType.RELU, false);
         denseSeq0.setName("SequenceModeling.0.linear.weight");
-        // Note: The BiLSTM outputs [batch, timeSteps, 512] but the Dense layer operates on
-        // each time step independently. We apply Dense(256) to each of the 5 time steps,
-        // not pooling across time or processing the full sequence. For this CRNN architecture,
-        // this Time Distributed Dense pattern matches the EasyOCR SequenceModeling layer.
         network.add(denseSeq0);
 
+        // Second Dense layer: projects from BiLSTM output (512) to intermediate (256)
+        // This matches SequenceModeling.1.linear.weight [256, 512] = 131072 elements
+        Dense denseSeq1 = new Dense(256, 512, Dense.ActivationType.RELU, false);
+        denseSeq1.setName("SequenceModeling.1.linear.weight");
+        network.add(denseSeq1);
+
         // Output layer: 256 -> 97 classes (96 characters + 1 blank for CTC)
-        // Note: EasyOCR's Prediction.weight has shape [97, 256], so we need 97 output units
-        // No bias for output layer
-        Dense denseOutput = new Dense(97, Dense.ActivationType.SOFTMAX, false);
+        // This matches Prediction.weight [97, 256] = 24832 elements
+        Dense denseOutput = new Dense(97, 256, Dense.ActivationType.SOFTMAX, false);
         denseOutput.setName("Prediction.weight");
         network.add(denseOutput);
     }
@@ -285,10 +286,6 @@ public class OcrEngine implements AutoCloseable {
         // Preprocess the image
         BufferedImage processed = config.enablePreprocessing ?
             preprocessor.process(image) : image;
-
-        // Log preprocessing info for debugging
-        System.err.println("DEBUG: Input image dimensions: " + image.getWidth() + "x" + image.getHeight());
-        System.err.println("DEBUG: Preprocessed image dimensions: " + processed.getWidth() + "x" + processed.getHeight());
 
         // Extract features as tensor
         Tensor input = imageToTensor(processed);
@@ -530,6 +527,16 @@ public class OcrEngine implements AutoCloseable {
     }
 
     /**
+     * Gets the internal network list.
+     * This is used by the training module to access and modify layer weights.
+     *
+     * @return The list of network layers
+     */
+    public List<Layer> getNetwork() {
+        return network;
+    }
+
+    /**
      * Gets the total number of parameters in the network.
      *
      * @return Total parameter count
@@ -638,6 +645,18 @@ public class OcrEngine implements AutoCloseable {
             // Read number of layers
             int numLayers = buffer.getInt();
             System.out.println("Loading " + numLayers + " pre-trained layers...");
+            System.out.println("DEBUG: Network has " + network.size() + " layers");
+            for (int i = 0; i < network.size(); i++) {
+                Layer layer = network.get(i);
+                System.out.println("DEBUG: Layer " + i + ": " + layer.getName() + " (" + layer.getClass().getSimpleName() + ")");
+            }
+            
+            // Adjust numLayers if weight file has more layers than network
+            // Some weight files may have header mismatch
+            if (numLayers > network.size()) {
+                System.out.println("WARNING: Weight file claims " + numLayers + " layers but network has " + network.size() + " layers. Adjusting...");
+                numLayers = network.size();
+            }
             
             // Calculate expected size for simple format
             // Simple format: 4 bytes (paramSize) per layer
@@ -710,37 +729,70 @@ public class OcrEngine implements AutoCloseable {
                 layerMap.put(layerName.toLowerCase(), layer);
             }
         }
-        
+
         int loadedLayers = 0;
-        
-        for (int i = 0; i < numLayers; i++) {
+
+        // Track if we've already loaded SequenceModeling.1.linear.weight to skip duplicates
+        boolean alreadyLoadedSeq1Linear = false;
+
+        // Only read the first 17 items from the file (skip the 18th which is a duplicate)
+        // The weight file has a duplicate SequenceModeling.1.linear.weight and is missing Prediction.weight
+        int maxLayersToRead = Math.min(numLayers, 17);
+
+        for (int i = 0; i < maxLayersToRead; i++) {
             try {
                 // Check if we have enough bytes for at least the name length
                 if (!buffer.hasRemaining()) {
                     System.err.println("Buffer exhausted at layer " + i);
                     break;
                 }
-                
+
                 // Read name length (1 byte)
                 int nameLength = buffer.get() & 0xFF;
-                
+
                 // Validate name length to prevent OOM
                 if (nameLength <= 0 || nameLength > 200) {
                     System.err.println("Invalid name length: " + nameLength + ", stopping load");
                     break;
                 }
-                
+
                 // Read name
                 byte[] nameBytes = new byte[nameLength];
                 buffer.get(nameBytes);
                 String layerName = new String(nameBytes, "UTF-8");
-                
+
+                // Skip duplicate SequenceModeling.1.linear.weight
+                if (layerName.equals("SequenceModeling.1.linear.weight") && alreadyLoadedSeq1Linear) {
+                    System.out.println("SKIPPING duplicate layer: " + layerName);
+                    // Still need to read the weight data from buffer to skip it properly
+                    // Read layer type
+                    buffer.get();
+                    // Read shape dimensions
+                    int shapeDim = buffer.getInt();
+                    long weightSize = 1;
+                    for (int j = 0; j < shapeDim; j++) {
+                        long dimValue = buffer.getLong(); // skip shape values
+                        weightSize *= dimValue;
+                    }
+                    // Skip weight data
+                    for (int j = 0; j < weightSize; j++) {
+                        buffer.getFloat();
+                    }
+                    continue;
+                }
+
+                // Mark SequenceModeling.1.linear.weight as loaded
+                if (layerName.equals("SequenceModeling.1.linear.weight")) {
+                    alreadyLoadedSeq1Linear = true;
+                }
+
                 // Read layer type (1 byte)
                 if (!buffer.hasRemaining()) {
                     System.err.println("Buffer exhausted after layer name at layer " + i);
                     break;
                 }
                 int layerType = buffer.get() & 0xFF;
+                System.out.println("DEBUG: Layer " + i + " type=" + layerType + ", name='" + layerName + "'");
                 
                 // Read weight tensor dimensions
                 if (!buffer.hasRemaining()) {
@@ -787,14 +839,17 @@ public class OcrEngine implements AutoCloseable {
                 }
                 
                 // Read weight data
+                System.out.println("DEBUG: About to read weights for '" + layerName + "', buffer.remaining=" + buffer.remaining() + ", weightBytesNeeded=" + weightBytesNeeded);
                 float[] weights = new float[(int) weightSize];
                 for (int j = 0; j < weightSize; j++) {
                     weights[j] = buffer.getFloat();
                 }
+                System.out.println("DEBUG: Successfully read " + weightSize + " weights for '" + layerName + "'");
                 
                 // Check if there's a bias (remaining data that looks like a 1D tensor)
                 int biasSize = 0;
                 float[] biases = null;
+                System.out.println("DEBUG: After reading weights, buffer.remaining=" + buffer.remaining());
                 
                 if (buffer.hasRemaining() && buffer.remaining() >= 4) {
                     // Peek at the next value to check if it's a 1D shape
@@ -826,7 +881,9 @@ public class OcrEngine implements AutoCloseable {
                 // Try to find matching layer by name
                 // The Python converter uses names like "FeatureExtraction.ConvNet.0.weight"
                 // We need to match these to Java layer names
+                System.out.println("DEBUG: About to call findMatchingLayer for '" + layerName + "'");
                 Layer matchingLayer = findMatchingLayer(layerMap, layerName);
+                System.out.println("DEBUG: findMatchingLayer returned " + (matchingLayer != null ? matchingLayer.getName() : "null") + " for '" + layerName + "'");
                 
                 if (matchingLayer != null) {
                     // Apply weights to the layer
@@ -872,6 +929,8 @@ public class OcrEngine implements AutoCloseable {
         // Python names like "FeatureExtraction.ConvNet.0.weight"
         String simpleName = pythonName.toLowerCase();
         
+        System.out.println("DEBUG findMatchingLayer: pythonName='" + pythonName + "', simpleName='" + simpleName + "'");
+        
         // Extract layer index from ConvNet.X pattern
         java.util.regex.Pattern convPattern = java.util.regex.Pattern.compile("convnet\\.(\\d+)");
         java.util.regex.Matcher matcher = convPattern.matcher(simpleName);
@@ -890,32 +949,54 @@ public class OcrEngine implements AutoCloseable {
         
         // Check for rnn/lstm patterns (SequenceModeling layers)
         // EasyOCR layer names: "SequenceModeling.0.rnn.weight_forward"
+        // Also handles: "SequenceModeling.0.rnn.weight_forward_hidden", "weight_forward_reverse", etc.
+        System.out.println("DEBUG: Checking sequence/modeling: contains sequence=" + simpleName.contains("sequence") + ", contains modeling=" + simpleName.contains("modeling"));
         if (simpleName.contains("sequence") && simpleName.contains("modeling")) {
-            java.util.regex.Pattern seqPattern = java.util.regex.Pattern.compile("modeling\\.(\\d+)\\.");
+            java.util.regex.Pattern seqPattern = java.util.regex.Pattern.compile("modeling\\.(\\d+)\\.rnn");
             matcher = seqPattern.matcher(simpleName);
-            if (matcher.find()) {
-                int seqIndex = Integer.parseInt(matcher.group(1));
-                
-                // Check if this is a linear/dense layer (Prediction layer)
+            boolean found = matcher.find();
+            int seqIndex = -1;
+            if (found) {
+                seqIndex = Integer.parseInt(matcher.group(1));
+            }
+            if (found) {
+                // This is definitely a BiLSTM layer or weight component (has .rnn. in name)
+                // Route to BiLSTM layers at indices 12 and 13
+                int[] javaIndices = {12, 13};
+                if (seqIndex < javaIndices.length && seqIndex < network.size()) {
+                    return network.get(javaIndices[seqIndex]);
+                }
+            } else {
+                // Check for linear/prediction layers (don't have .rnn. in name)
                 if (simpleName.contains("linear") || simpleName.contains("prediction")) {
-                    // SequenceModeling.x.linear -> Dense layers at indices 7 and 8
-                    // .0.linear is at Java index 7, .1.linear is at Java index 8
-                    int[] javaIndices = {7, 8};
-                    if (seqIndex < javaIndices.length && seqIndex < network.size()) {
-                        return network.get(javaIndices[seqIndex]);
+                    // Handle Prediction.weight separately (no SequenceModeling.X prefix)
+                    if (simpleName.equals("prediction.weight") || simpleName.contains("prediction.weight")) {
+                        System.out.println("DEBUG: Handling Prediction.weight, network.size()=" + network.size());
+                        // Return the last Dense layer (index 16)
+                        if (network.size() > 16) {
+                            Layer layer = network.get(16);
+                            System.out.println("DEBUG: Returning layer " + layer.getName() + " at index 16");
+                            return layer;
+                        }
+                    }
+                    
+                    // Handle SequenceModeling.x.linear weights
+                    // SequenceModeling.0.linear -> Dense layer at index 14
+                    // SequenceModeling.1.linear -> Dense layer at index 15
+                    int[] javaIndices = {14, 15};
+                    java.util.regex.Pattern linearPattern = java.util.regex.Pattern.compile("modeling\\.(\\d+)\\.(linear|prediction)");
+                    matcher = linearPattern.matcher(simpleName);
+                    if (matcher.find()) {
+                        int linearSeqIndex = Integer.parseInt(matcher.group(1));
+                        if (linearSeqIndex < javaIndices.length && linearSeqIndex < network.size()) {
+                            return network.get(javaIndices[linearSeqIndex]);
+                        }
                     }
                     // Fallback: try finding Dense layers
                     for (int i = 0; i < network.size(); i++) {
                         if (network.get(i) instanceof Dense) {
                             return network.get(i);
                         }
-                    }
-                } else {
-                    // SequenceModeling.x.rnn -> BiLSTM layers
-                    // .0.rnn is at Java index 5, .1.rnn is at Java index 6
-                    int[] javaIndices = {5, 6};
-                    if (seqIndex < javaIndices.length && seqIndex < network.size()) {
-                        return network.get(javaIndices[seqIndex]);
                     }
                 }
             }
@@ -928,7 +1009,7 @@ public class OcrEngine implements AutoCloseable {
             matcher = rnnPattern.matcher(simpleName);
             if (matcher.find()) {
                 int seqIndex = Integer.parseInt(matcher.group(1));
-                int[] javaIndices = {5, 6};
+                int[] javaIndices = {12, 13};
                 if (seqIndex < javaIndices.length && seqIndex < network.size()) {
                     return network.get(javaIndices[seqIndex]);
                 }
@@ -937,9 +1018,11 @@ public class OcrEngine implements AutoCloseable {
         
         // Check for prediction layer
         if (simpleName.contains("prediction")) {
+            System.out.println("DEBUG: Found 'prediction' in fallback check, network.size()=" + network.size());
             // Last dense layer
             for (int i = network.size() - 1; i >= 0; i--) {
                 if (network.get(i) instanceof Dense) {
+                    System.out.println("DEBUG: Returning Dense layer " + network.get(i).getName() + " at index " + i);
                     return network.get(i);
                 }
             }

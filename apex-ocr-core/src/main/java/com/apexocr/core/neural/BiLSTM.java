@@ -544,7 +544,7 @@ public class BiLSTM implements Layer {
             incomingSeqIndex = Integer.parseInt(seqMatcher.group(1));
         }
 
-        System.out.println("BiLSTM: Processing " + layerName + " (seqIndex=" + incomingSeqIndex + ")");
+
 
         // Identify which component this is based on layer name
         boolean isForward = layerName.contains("forward");
@@ -552,13 +552,16 @@ public class BiLSTM implements Layer {
         boolean isHidden = layerName.contains("hidden");
 
         // If this is a different sequence than what we've been loading, reset accumulators
-        if (incomingSeqIndex != currentSequenceIndex && incomingSeqIndex >= 0) {
-            System.out.println("BiLSTM: Switching to sequence " + incomingSeqIndex + ", resetting accumulators");
+        if (incomingSeqIndex >= 0 && incomingSeqIndex != currentSequenceIndex) {
+            // This is a new sequence - reset accumulators
             accumulatorWForward = null;
             accumulatorWForwardHidden = null;
             accumulatorWReverse = null;
             accumulatorWReverseHidden = null;
             weightsAccumulated = false;
+            currentSequenceIndex = incomingSeqIndex;
+        } else if (currentSequenceIndex < 0) {
+            // First time loading any sequence - initialize
             currentSequenceIndex = incomingSeqIndex;
         }
 
@@ -571,50 +574,51 @@ public class BiLSTM implements Layer {
             weightsAccumulated = false;
         }
 
+        // Track which components we've stored using flags
+        boolean storedForward = false;
+        boolean storedForwardHidden = false;
+        boolean storedReverse = false;
+        boolean storedReverseHidden = false;
+        
         // Store the weights in the appropriate accumulator
-        if (isForward && !isHidden) {
-            System.out.println("BiLSTM: Storing weight_forward component");
-            System.arraycopy(weights, 0, accumulatorWForward, 0, singleTensorSize);
-        } else if (isForward && isHidden) {
-            System.out.println("BiLSTM: Storing weight_forward_hidden component");
-            System.arraycopy(weights, 0, accumulatorWForwardHidden, 0, singleTensorSize);
-        } else if (!isForward && !isReverse && !isHidden) {
-            // "forward" in name but not reverse or hidden - treat as forward input
-            System.out.println("BiLSTM: Storing forward input component");
-            System.arraycopy(weights, 0, accumulatorWForward, 0, singleTensorSize);
-        } else if (isReverse && isHidden) {
-            System.out.println("BiLSTM: Storing weight_forward_hidden_reverse component");
+        // Check for specific weight component patterns (most specific first)
+        if (layerName.endsWith("weight_forward_hidden_reverse")) {
             System.arraycopy(weights, 0, accumulatorWReverseHidden, 0, singleTensorSize);
-        } else if (isReverse) {
-            System.out.println("BiLSTM: Storing weight_forward_reverse component");
+            storedReverseHidden = true;
+        } else if (layerName.endsWith("weight_forward_reverse")) {
             System.arraycopy(weights, 0, accumulatorWReverse, 0, singleTensorSize);
+            storedReverse = true;
+        } else if (layerName.endsWith("weight_forward_hidden")) {
+            System.arraycopy(weights, 0, accumulatorWForwardHidden, 0, singleTensorSize);
+            storedForwardHidden = true;
+        } else if (layerName.endsWith("weight_forward")) {
+            System.arraycopy(weights, 0, accumulatorWForward, 0, singleTensorSize);
+            storedForward = true;
         } else {
             // Fallback - store based on which accumulators are empty
-            System.out.println("BiLSTM: Storing using fallback logic");
             if (accumulatorWForward[0] == 0) {
                 System.arraycopy(weights, 0, accumulatorWForward, 0, singleTensorSize);
+                storedForward = true;
             } else if (accumulatorWForwardHidden[0] == 0) {
                 System.arraycopy(weights, 0, accumulatorWForwardHidden, 0, singleTensorSize);
+                storedForwardHidden = true;
             } else if (accumulatorWReverse[0] == 0) {
                 System.arraycopy(weights, 0, accumulatorWReverse, 0, singleTensorSize);
+                storedReverse = true;
             } else {
                 System.arraycopy(weights, 0, accumulatorWReverseHidden, 0, singleTensorSize);
+                storedReverseHidden = true;
             }
         }
 
         // Check if all 4 tensors are available
-        boolean hasAll = accumulatorWForward[0] != 0 &&
-                         accumulatorWForwardHidden[0] != 0 &&
-                         accumulatorWReverse[0] != 0 &&
-                         accumulatorWReverseHidden[0] != 0;
+        boolean hasAll = storedForward && storedForwardHidden && storedReverse && storedReverseHidden;
 
         if (!hasAll) {
-            System.out.println("BiLSTM: Waiting for more weight components...");
             return;
         }
 
         // All 4 tensors are available, combine them
-        System.out.println("BiLSTM: All 4 weight components available, combining for sequence " + incomingSeqIndex + "...");
 
         // Create combined weights: [input+units, 4*units] = [512, 1024]
         // EasyOCR stores [output, input] = [1024, 256]

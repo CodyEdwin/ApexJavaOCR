@@ -32,6 +32,7 @@ public class Dense implements Layer {
     private long[] outputShape;
 
     private boolean training;
+    private boolean initialized;
     private Tensor inputCache;
     private Tensor outputCache;
 
@@ -62,6 +63,26 @@ public class Dense implements Layer {
         this.activation = activation;
         this.useBias = useBias;
         this.training = false;
+    }
+
+    /**
+     * Creates a new dense layer with specified input units.
+     *
+     * @param units The number of output units
+     * @param inputUnits The number of input units (for pre-trained weight loading)
+     * @param activation The activation function to use
+     * @param useBias Whether to include bias terms
+     */
+    public Dense(int units, int inputUnits, ActivationType activation, boolean useBias) {
+        this(units, activation, useBias);
+        this.name = "dense_" + units;
+        // Set up input shape for pre-trained weight validation
+        // But don't initialize weights - they will be loaded from pre-trained model
+        if (inputUnits > 0 && units > 0) {
+            this.inputShape = new long[]{inputUnits};
+            this.outputShape = new long[]{units};
+            this.initialized = true;
+        }
     }
 
     /**
@@ -129,10 +150,16 @@ public class Dense implements Layer {
         long[] inputShape = input.getShape();
         long batchSize = inputShape[0];
 
-        // Lazy initialization on first forward pass
-        if (weights == null) {
-            setInputShape(inputShape);
-            
+        // Lazy initialization on first forward pass (only if weights not already set)
+        // Also preserve 1D inputShape from constructor (used for pre-trained models)
+        // Only overwrite inputShape if it's null or 1D (not if it's 3D from warm-up)
+        if (weights == null || weights.getSize() == 0) {
+            // Only set inputShape if it's null (never set) or 1D (from constructor)
+            // Don't overwrite 3D inputShape from previous warm-up runs
+            if (this.inputShape == null || this.inputShape.length == 1) {
+                setInputShape(inputShape);
+            }
+
             // For 3D input [batch, timeSteps, features], initialize weights for features dimension only
             // For 2D input [batch, features], use the full input size
             if (inputShape.length == 3) {
@@ -140,7 +167,7 @@ public class Dense implements Layer {
                 long features = inputShape[2];
                 this.weights = new Tensor(new long[]{features, units}, Tensor.DataType.FLOAT32);
                 initializeWeightsTensor(this.weights);
-                
+
                 // Create bias if needed
                 if (useBias) {
                     this.bias = new Tensor(new long[]{units}, Tensor.DataType.FLOAT32);
@@ -355,10 +382,18 @@ public class Dense implements Layer {
         // Get expected dimensions from current layer configuration
         int expectedInputSize;
         int expectedOutputSize = this.units;
-        
-        if (inputShape != null && inputShape.length >= 2) {
-            // Use the already-configured input size from the network architecture
-            expectedInputSize = (int) inputShape[inputShape.length - 1];
+
+        if (inputShape != null && inputShape.length >= 1) {
+            // Only trust inputShape if it's a 1D array from the constructor [inputUnits]
+            // Don't trust 3D inputShape from runtime warm-up [batch, timeSteps, features]
+            if (inputShape.length == 1) {
+                // Use the constructor-configured input size
+                expectedInputSize = (int) inputShape[0];
+            } else {
+                // inputShape is from runtime (3D), infer input size from weight array
+                // Weight format from EasyOCR: [output, input] = total elements
+                expectedInputSize = weights.length / expectedOutputSize;
+            }
         } else {
             // Infer input units from weight array: input = total / output
             // Weight format from EasyOCR: [output, input] = total elements
@@ -378,7 +413,7 @@ public class Dense implements Layer {
         // EasyOCR stores weights as [output, input] (PyTorch convention)
         // We need to convert to Java's [input, output] format for matmul
         // Reuse existing weights tensor if dimensions match, otherwise create new one
-        if (this.weights == null || this.weights.getShape()[0] != expectedInputSize || 
+        if (this.weights == null || this.weights.getShape()[0] != expectedInputSize ||
             this.weights.getShape()[1] != expectedOutputSize) {
             this.weights = new Tensor(new long[]{expectedInputSize, expectedOutputSize}, Tensor.DataType.FLOAT32);
         }
