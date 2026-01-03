@@ -13,22 +13,23 @@ java {
 
 repositories {
     mavenCentral()
+    google()
+    mavenLocal()
+    gradlePluginPortal()
+    maven { url = 'https://central.sonatype.com/repository/maven-snapshots/' }
     maven { url = "https://jitpack.io" }
-    maven { url = "https://s3.amazonaws.com/libgdx-releases" }
 }
 
 dependencies {
-    // LibGDX Core - using correct artifact names
-    implementation 'com.badlogicgames.gdx:gdx:1.12.1'
-    implementation 'com.badlogicgames.gdx:gdx-backend-lwjgl3:1.12.1'
-    implementation 'com.badlogicgames.gdx:gdx-platform:1.12.1:natives-desktop'
-    
-    // LibGDX AI for pathfinding (used by some visualization features)
-    implementation 'com.badlogicgames.gdx:gdx-ai:1.8.0'
-    
+    // LibGDX Core - version 1.14.0
+    implementation "com.badlogicgames.gdx-controllers:gdx-controllers-desktop:2.2.3"
+    implementation "com.badlogicgames.gdx:gdx-backend-lwjgl3:1.14.0"
+    implementation "com.badlogicgames.gdx:gdx-platform:1.14.0:natives-desktop"
+    implementation "com.badlogicgames.gdx:gdx-freetype-platform:1.14.0:natives-desktop"
+
     // VisUI for 2D UI elements
-    implementation 'com.kotcrab.vis:vis-ui:1.5.2'
-    
+    implementation 'com.kotcrab.vis:vis-ui:1.5.7'
+
     // Dependencies from main project
     implementation project(':apex-ocr-core')
     implementation project(':apex-ocr-engine')
