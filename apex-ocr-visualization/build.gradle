@@ -1,0 +1,47 @@
+plugins {
+    id 'application'
+    id 'java-library'
+}
+
+group 'com.apexocr'
+version '1.0.0'
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_11
+    targetCompatibility = JavaVersion.VERSION_11
+}
+
+repositories {
+    mavenCentral()
+    maven { url = "https://jitpack.io" }
+}
+
+dependencies {
+    // LibGDX Core
+    implementation 'com.badlogicgames.gdx:gdx:1.12.1'
+    implementation 'com.badlogicgames.gdx:gdx-backend-lwjgl3:1.12.1'
+    implementation 'com.badlogicgames.gdx:gdx-backend-lwjglgl3:1.12.1'
+    implementation 'com.badlogicgames.gdx:gdx-platform:1.12.1:natives-desktop'
+    
+    // LibGDX 3D support
+    implementation 'com.badlogicgames.gdx:gdx-tools:1.12.1'
+    
+    // VisUI for 2D UI elements
+    implementation 'com.kotcrab.vis:vis-ui:1.5.2'
+    
+    // Dependencies from main project
+    implementation project(':apex-ocr-core')
+    implementation project(':apex-ocr-engine')
+}
+
+application {
+    mainClass = 'com.apexocr.visualization.NeuralNetworkVisualizer'
+}
+
+sourceSets {
+    main {
+        java {
+            srcDirs = ['src/main/java']
+        }
+    }
+}
