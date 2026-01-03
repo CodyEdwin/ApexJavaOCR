@@ -831,8 +831,35 @@ public class OCRTrainer {
         long[] inputShape = input.getShape();
         long[] outputShape = outputGrad.getShape();
         int batchSize = (int) inputShape[0];
-        int inFeatures = (int) inputShape[inputShape.length - 1];
-        int outFeatures = (int) outputShape[outputShape.length - 1];
+        int inputRank = inputShape.length;
+        int outputRank = outputShape.length;
+        
+        // Get the feature dimensions based on rank
+        int inFeatures;
+        int outFeatures;
+        
+        if (inputRank == 2) {
+            // [batch, features]
+            inFeatures = (int) inputShape[1];
+        } else if (inputRank == 3) {
+            // [batch, time, features]
+            inFeatures = (int) inputShape[2];
+        } else if (inputRank == 4) {
+            // [batch, height, width, channels]
+            inFeatures = (int) inputShape[inputRank - 1];
+        } else {
+            System.err.println("[BACKWARD] Unsupported input rank: " + inputRank);
+            return null;
+        }
+        
+        if (outputRank == 2) {
+            outFeatures = (int) outputShape[1];
+        } else if (outputRank == 3) {
+            outFeatures = (int) outputShape[outputRank - 1];
+        } else {
+            System.err.println("[BACKWARD] Unsupported output rank: " + outputRank);
+            return null;
+        }
         
         // Get weights
         Tensor weights = null;
@@ -864,23 +891,54 @@ public class OCRTrainer {
             weightInFeatures = (int) weightShape[0];
             weightOutFeatures = (int) weightShape[1];
             
-            // For 3D input [batch, time, features]
+            // For 2D input [batch, features]
             // weightGrad should be [inFeatures, outFeatures]
             for (int in = 0; in < weightInFeatures; in++) {
                 for (int out = 0; out < weightOutFeatures; out++) {
                     float sum = 0;
                     for (int b = 0; b < batchSize; b++) {
                         float inVal = 0;
-                        if (inputShape.length == 3) {
-                            // Average over time steps
-                            for (int t = 0; t < inputShape[1]; t++) {
-                                inVal += input.getFloat(b, t, in);
-                            }
-                            inVal /= inputShape[1];
-                        } else {
+                        
+                        // Handle different input ranks
+                        if (inputRank == 2) {
+                            // [batch, features]
                             inVal = input.getFloat(b, in);
+                        } else if (inputRank == 3) {
+                            // [batch, time, features] - average over time
+                            float timeSum = 0;
+                            int timeSteps = (int) inputShape[1];
+                            for (int t = 0; t < timeSteps; t++) {
+                                timeSum += input.getFloat(b, t, in);
+                            }
+                            inVal = timeSum / timeSteps;
+                        } else if (inputRank == 4) {
+                            // [batch, height, width, channels] - average over spatial
+                            float spatialSum = 0;
+                            int height = (int) inputShape[1];
+                            int width = (int) inputShape[2];
+                            for (int h = 0; h < height; h++) {
+                                for (int w = 0; w < width; w++) {
+                                    spatialSum += input.getFloat(b, h, w, in);
+                                }
+                            }
+                            inVal = spatialSum / (height * width);
                         }
-                        float outGrad = outputGrad.getFloat(b, out);
+                        
+                        float outGrad;
+                        if (outputRank == 2) {
+                            outGrad = outputGrad.getFloat(b, out);
+                        } else if (outputRank == 3) {
+                            // Average over time
+                            float timeSum = 0;
+                            int timeSteps = (int) outputShape[1];
+                            for (int t = 0; t < timeSteps; t++) {
+                                timeSum += outputGrad.getFloat(b, t, out);
+                            }
+                            outGrad = timeSum / timeSteps;
+                        } else {
+                            outGrad = outputGrad.getFloat(b, out);
+                        }
+                        
                         sum += inVal * outGrad;
                     }
                     long linearIndex = in * weightOutFeatures + out;
@@ -895,7 +953,21 @@ public class OCRTrainer {
             for (int out = 0; out < weightOutFeatures; out++) {
                 float sum = 0;
                 for (int b = 0; b < batchSize; b++) {
-                    sum += outputGrad.getFloat(b, out);
+                    float outGrad;
+                    if (outputRank == 2) {
+                        outGrad = outputGrad.getFloat(b, out);
+                    } else if (outputRank == 3) {
+                        // Average over time
+                        float timeSum = 0;
+                        int timeSteps = (int) outputShape[1];
+                        for (int t = 0; t < timeSteps; t++) {
+                            timeSum += outputGrad.getFloat(b, t, out);
+                        }
+                        outGrad = timeSum / timeSteps;
+                    } else {
+                        outGrad = outputGrad.getFloat(b, out);
+                    }
+                    sum += outGrad;
                 }
                 biasGrad.addGrad(out, sum / batchSize);
             }
@@ -904,19 +976,40 @@ public class OCRTrainer {
         // Compute input gradient: dinput = outputGrad @ weights^T
         Tensor inputGrad = new Tensor(inputShape, Tensor.DataType.FLOAT32);
         for (int b = 0; b < batchSize; b++) {
-            for (int in = 0; in < inFeatures; in++) {
+            for (int in = 0; in < weightInFeatures; in++) {
                 float sum = 0;
-                for (int out = 0; out < outFeatures; out++) {
-                    float outGrad = outputGrad.getFloat(b, out);
+                for (int out = 0; out < weightOutFeatures; out++) {
+                    float outGrad;
+                    if (outputRank == 2) {
+                        outGrad = outputGrad.getFloat(b, out);
+                    } else if (outputRank == 3) {
+                        // Average over time
+                        float timeSum = 0;
+                        int timeSteps = (int) outputShape[1];
+                        for (int t = 0; t < timeSteps; t++) {
+                            timeSum += outputGrad.getFloat(b, t, out);
+                        }
+                        outGrad = timeSum / timeSteps;
+                    } else {
+                        outGrad = outputGrad.getFloat(b, out);
+                    }
                     float wVal = weights.getFloat(in, out);
                     sum += outGrad * wVal;
                 }
-                if (inputShape.length == 3) {
+                
+                // Set gradient based on input rank
+                if (inputRank == 2) {
+                    inputGrad.setFloat(sum, b, in);
+                } else if (inputRank == 3) {
                     for (int t = 0; t < inputShape[1]; t++) {
                         inputGrad.setFloat(sum, b, t, in);
                     }
-                } else {
-                    inputGrad.setFloat(sum, b, in);
+                } else if (inputRank == 4) {
+                    for (int h = 0; h < inputShape[1]; h++) {
+                        for (int w = 0; w < inputShape[2]; w++) {
+                            inputGrad.setFloat(sum, b, h, w, in);
+                        }
+                    }
                 }
             }
         }
@@ -1059,6 +1152,7 @@ public class OCRTrainer {
         for (Layer layer : engine.getNetwork()) {
             layer.eval();  // Use eval mode for inference
             
+            Tensor layerInput = current;
             current = layer.forward(current, false);
             
             // Cache intermediate values for backward pass
@@ -1066,14 +1160,14 @@ public class OCRTrainer {
             
             if (layer instanceof Conv2D) {
                 if (convCount == 0) {
-                    sample.convInput = inputCopy;
+                    sample.convInput = layerInput.copy();
                 }
                 convCount++;
             } else if (layer instanceof BiLSTM) {
-                sample.lstmInput = current.copy();
+                sample.lstmInput = layerInput.copy();
             } else if (layer instanceof Dense) {
                 if (denseCount == 0) {
-                    sample.denseInput = current.copy();
+                    sample.denseInput = layerInput.copy();
                 }
                 denseCount++;
             }

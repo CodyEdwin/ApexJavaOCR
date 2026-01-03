@@ -35,8 +35,8 @@ public class ApexStatsMonitor implements TrainingMonitor {
     private final Deque<EpochMetrics> epochHistory = new ArrayDeque<>(100);
     
     public ApexStatsMonitor() {
-        // Initialize with default listeners
-        listeners.add(new ConsoleLogger());
+        // Listeners are added externally via addListener()
+        // Default logging is configured when added to OCRTrainer
     }
     
     @Override
