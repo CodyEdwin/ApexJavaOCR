@@ -198,6 +198,23 @@ public class ApexStatsMonitor implements TrainingMonitor {
     }
     
     /**
+     * Update weight statistics directly with pre-calculated values.
+     * This is used for real-time visualization updates during training.
+     * @param layerName Name of the layer
+     * @param mean Mean weight value
+     * @param std Standard deviation of weights
+     * @param min Minimum weight value
+     * @param max Maximum weight value
+     */
+    public void updateWeightStats(String layerName, float mean, float std, float min, float max) {
+        LayerStats stats = layerStats.computeIfAbsent(layerName, k -> new LayerStats(k));
+        stats.weightMean = mean;
+        stats.weightStd = std;
+        stats.weightMin = min;
+        stats.weightMax = max;
+    }
+    
+    /**
      * Record activation statistics for a layer.
      * @param layerName Name of the layer
      * @param activations Tensor containing activations

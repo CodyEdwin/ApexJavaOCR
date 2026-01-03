@@ -488,10 +488,17 @@ public class OCRTrainer {
             float avgLoss = totalLoss / totalSamples;
             float accuracy = (float) correct / totalSamples;
             
+            // Update monitoring and visualization with epoch-level statistics
+            updateLayerWeightStatistics();
+            
             // Notify monitoring of epoch end
             if (statsMonitor != null) {
                 statsMonitor.onEpochEnd(epoch, avgLoss, accuracy);
             }
+            
+            // Push final epoch snapshot to visualization
+            pushTrainingSnapshot(epoch, epochs, batchesProcessed, 
+                totalBatches, avgLoss, accuracy, TrainingSnapshot.TrainingPhase.OPTIMIZATION);
             
             System.out.printf("Epoch %d/%d - Loss: %.6f - Accuracy: %.2f%% - Time: %.1fs\n", 
                 epoch, epochs, avgLoss, accuracy * 100, epochTime);
@@ -634,6 +641,40 @@ public class OCRTrainer {
                 stats.weightMean, stats.weightStd, stats.weightMin, stats.weightMax);
             System.out.printf("  Gradients - Mean: %.6f, Std: %.6f, L2Norm: %.6f\n",
                 stats.gradientMean, stats.gradientStd, stats.gradientL2Norm);
+        }
+    }
+    
+    /**
+     * Update layer weight statistics for visualization.
+     * Collects real-time weight statistics from all trainable layers.
+     */
+    private void updateLayerWeightStatistics() {
+        if (statsMonitor == null) return;
+        
+        for (Layer layer : engine.getNetwork()) {
+            Tensor weights = layer.getWeights();
+            if (weights == null) continue;
+            
+            // Calculate weight statistics
+            long size = weights.getSize();
+            float sum = 0, sumSq = 0;
+            float min = Float.MAX_VALUE;
+            float max = Float.MIN_VALUE;
+            
+            for (long i = 0; i < size; i++) {
+                float val = weights.getFloat(i);
+                sum += val;
+                sumSq += val * val;
+                if (val < min) min = val;
+                if (val > max) max = val;
+            }
+            
+            float mean = sum / size;
+            float variance = (sumSq / size) - (mean * mean);
+            float std = (float) Math.sqrt(Math.max(0, variance));
+            
+            // Update stats in monitor
+            statsMonitor.updateWeightStats(layer.getName(), mean, std, min, max);
         }
     }
     
@@ -1349,6 +1390,8 @@ public class OCRTrainer {
                     System.err.println("Make sure images are named with their text content.");
                     return;
                 }
+                
+                System.out.println("Starting training with " + samples.size() + " samples...");
                 
                 // Run full training
                 trainer.train(samples);

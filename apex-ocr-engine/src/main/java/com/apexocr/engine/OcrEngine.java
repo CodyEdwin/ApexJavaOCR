@@ -2,6 +2,7 @@ package com.apexocr.engine;
 
 import com.apexocr.core.tensor.Tensor;
 import com.apexocr.core.neural.Layer;
+import com.apexocr.core.neural.Layer.Initializer;
 import com.apexocr.core.neural.Conv2D;
 import com.apexocr.core.neural.MaxPool2D;
 import com.apexocr.core.neural.Dense;
@@ -308,8 +309,8 @@ public class OcrEngine implements AutoCloseable {
             } else if (layer instanceof Dense) {
                 Dense dense = (Dense) layer;
                 // Use Xavier for layers with softmax, He for ReLU
-                Initializer init = (dense.activation == Dense.ActivationType.SOFTMAX || 
-                                    dense.activation == Dense.ActivationType.LINEAR) 
+                Initializer init = (dense.getActivation() == Dense.ActivationType.SOFTMAX || 
+                                    dense.getActivation() == Dense.ActivationType.LINEAR) 
                                    ? Initializer.XAVIER_NORMAL 
                                    : Initializer.HE_NORMAL;
                 dense.initialize(init);

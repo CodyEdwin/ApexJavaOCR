@@ -83,6 +83,12 @@ public class NeuralNetworkVisualizer extends ApplicationAdapter {
         VisualizationService service = VisualizationService.getInstance();
         service.setVisualizerConnected(true);
         open(architecture, new String[]{"--training"});
+        
+        // Set training mode after the visualizer is created
+        if (instance != null) {
+            instance.isTrainingMode = true;
+            System.out.println("[NeuralNetworkVisualizer] Training mode enabled");
+        }
     }
     
     public static void close() {
@@ -106,6 +112,17 @@ public class NeuralNetworkVisualizer extends ApplicationAdapter {
     
     public NeuralNetworkVisualizer(NetworkArchitecture architecture) {
         this.networkArchitecture = architecture;
+        // Check if we're in training mode based on startup args
+        String[] args = startupArgs.get();
+        if (args != null) {
+            for (String arg : args) {
+                if ("--training".equals(arg)) {
+                    this.isTrainingMode = true;
+                    System.out.println("[NeuralNetworkVisualizer] Training mode detected from args");
+                    break;
+                }
+            }
+        }
     }
     
     // ==================== LIFECYCLE METHODS ====================

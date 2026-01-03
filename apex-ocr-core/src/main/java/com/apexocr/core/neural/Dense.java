@@ -355,6 +355,16 @@ public class Dense implements Layer {
         return bias;
     }
 
+    /**
+     * Gets the activation type for this layer.
+     * Used by external classes to determine initialization strategy.
+     *
+     * @return The activation type
+     */
+    public ActivationType getActivation() {
+        return activation;
+    }
+
     @Override
     public void setWeights(Tensor weights) {
         this.weights = weights;
